@@ -95,9 +95,7 @@ fun SalonOwnerApp(
             "pending" -> PendingScreen(
                 state = state,
                 onRefreshStatus = { viewModel.refreshStatus() },
-                onSignOut = { viewModel.signOut() },
-                onSimulateApproval = { viewModel.simulateStatusChange("approved") },
-                onSimulateRejection = { viewModel.simulateStatusChange("rejected", "Shop license photo was unclear. Please upload a high-resolution copy.") }
+                onSignOut = { viewModel.signOut() }
             )
 
             "rejected" -> RejectedScreen(

@@ -237,7 +237,7 @@ fun SalonBookingSettingsSection(
     var noticeExpanded by remember { mutableStateOf(false) }
     var lateThresholdExpanded by remember { mutableStateOf(false) }
 
-    val slotIntervals = listOf(15, 30, 45, 60)
+    val slotIntervals = listOf(15, 30, 60) // allowed by salons_slot_interval_minutes_check
     val bookingWindows = listOf(3, 7, 14, 30, 60)
     val minNotices = listOf(0, 15, 30, 60, 120)
     val lateThresholds = listOf(10, 15, 20, 30)

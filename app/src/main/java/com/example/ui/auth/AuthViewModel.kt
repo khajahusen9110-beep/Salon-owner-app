@@ -301,7 +301,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         if (salon == null) return "register"
         return when (salon.verificationStatus.lowercase()) {
             "pending" -> "pending"
-            "rejected" -> "rejected"
+            "rejected", "suspended" -> "rejected"
             "approved" -> "main"
             "draft" -> "register"
             else -> "register"
@@ -567,9 +567,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val salonId = s.salon?.id ?: "salon-temp-id"
+        val salonId = s.salon?.id ?: ""
+        val fileBytes = s.documentBytes
+        if (fileBytes == null || fileBytes.isEmpty()) {
+            _uiState.update { it.copy(errorMessage = "Please choose a document to upload.") }
+            return
+        }
         val fileName = s.documentName ?: "doc_${System.currentTimeMillis()}.jpg"
-        val fileBytes = s.documentBytes ?: ByteArray(10) { 0 }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
@@ -632,11 +636,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = null
             )
         }
-    }
-
-    fun simulateStatusChange(newStatus: String, reason: String? = null) {
-        salonRepo.simulateAdminDecision(newStatus, reason)
-        refreshStatus()
     }
 
     // ==========================================

@@ -50,7 +50,8 @@ fun RejectedScreen(
 ) {
     val lang = state.language
     val salonName = state.salon?.name ?: "Your Salon"
-    val rejectionReason = state.salon?.rejectionReason ?: "Document image was blurry or invalid. Please upload a clear photo or copy of your shop license / GST certificate."
+    val rejectionReason = state.salon?.rejectionReason ?: "No reason was provided. Please contact support."
+    val isSuspended = state.salon?.verificationStatus == "suspended"
 
     Box(
         modifier = modifier
@@ -84,7 +85,7 @@ fun RejectedScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = SalonStrings.get("rejected_title", lang),
+                text = if (isSuspended) "Salon suspended" else SalonStrings.get("rejected_title", lang),
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp
@@ -140,8 +141,8 @@ fun RejectedScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Edit and Resubmit Button
-            Button(
+            // Edit and Resubmit Button (a suspended salon can only be reinstated by the platform admin)
+            if (!isSuspended) Button(
                 onClick = onEditAndResubmit,
                 modifier = Modifier
                     .fillMaxWidth()

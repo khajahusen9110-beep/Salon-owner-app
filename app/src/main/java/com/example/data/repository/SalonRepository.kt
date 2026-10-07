@@ -1,26 +1,12 @@
 package com.example.data.repository
 
 import android.content.Context
-import com.example.data.model.AddTimeOffParams
 import com.example.data.model.Booking
 import com.example.data.model.Combo
-import com.example.data.model.ComboDetailsParams
-import com.example.data.model.ComboDetailsResponse
-import com.example.data.model.ComboService
-import com.example.data.model.CreateMySalonParams
-import com.example.data.model.CreateServiceCategoryRequest
-import com.example.data.model.CreateStaffRequest
-import com.example.data.model.CreateWalkInParams
 import com.example.data.model.CustomerSummary
-import com.example.data.model.CustomerSummaryParams
-import com.example.data.model.EarningsSummaryParams
-import com.example.data.model.GetOwnerBookingsParams
 import com.example.data.model.OwnerDashboard
-import com.example.data.model.Profile
 import com.example.data.model.RecurringBreak
-import com.example.data.model.RescheduleBookingParams
 import com.example.data.model.Salon
-import com.example.data.model.SalonDocument
 import com.example.data.model.SalonHours
 import com.example.data.model.SalonNotification
 import com.example.data.model.SalonPayoutDetails
@@ -30,584 +16,60 @@ import com.example.data.model.ServiceCategory
 import com.example.data.model.Staff
 import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
-import com.example.data.model.StaffService
 import com.example.data.model.StaffTimeOff
-import com.example.data.model.SubmitVerificationParams
-import com.example.data.model.TimeOffConflictParams
-import com.example.data.model.UpdateBookingStatusRequest
-import com.example.data.model.UpdateNotificationReadRequest
-import com.example.data.model.UpdateProfileLanguageRequest
-import com.example.data.model.UpdateReviewReplyRequest
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
-import com.example.data.model.UpdateSalonsActiveRequest
-import com.example.data.model.UpdateServiceCategoryRequest
-import com.example.data.model.UpdateStaffRequest
-import com.example.data.network.SupabaseClient
-import com.example.data.network.SupabaseConfig
+import com.example.data.network.IstTime
+import com.example.data.network.SupabaseException
+import com.example.data.network.SupabaseHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 sealed class SalonResult<out T> {
     data class Success<out T>(val data: T) : SalonResult<T>()
     data class Error(val message: String) : SalonResult<Nothing>()
 }
 
+/**
+ * Owner-side data access against the shared Supabase backend.
+ *
+ * Every call goes to the server; RLS restricts the owner to their own salon. Failures are returned
+ * as [SalonResult.Error] with a user-facing message - nothing is faked locally.
+ */
 class SalonRepository(
-    private val context: Context,
+    @Suppress("unused") private val context: Context,
     private val authRepository: AuthRepository
 ) {
-    // In-memory demo store for bookings and catalog when offline or in sandbox
-    private val localBookings = mutableListOf<Booking>()
-    private val localStaff = mutableListOf<Staff>()
-    private val localServices = mutableListOf<SalonService>()
-    private val localRecurringBreaks = mutableListOf<RecurringBreak>()
-    private val localStaffTimeOff = mutableListOf<StaffTimeOff>()
-    private val localCategories = mutableListOf<ServiceCategory>()
-    private val localCombos = mutableListOf<Combo>()
-    private val localStaffServices = mutableMapOf<String, MutableList<String>>() // serviceId -> list of staffIds
-    private val localStaffHours = mutableMapOf<String, MutableList<StaffHours>>() // staffId -> list of StaffHours
-    private val localSalonHours = mutableListOf<SalonHours>()
-    private val localPayoutDetails = mutableMapOf<String, SalonPayoutDetails>() // salonId -> payout details
-    private val localReviews = mutableListOf<SalonReview>()
-    private val localNotifications = mutableListOf<SalonNotification>()
 
-    init {
-        initLocalDataIfEmpty()
-    }
-
-    private fun initLocalDataIfEmpty() {
-        if (localStaff.isEmpty()) {
-            localStaff.addAll(
-                listOf(
-                    Staff(id = "st-1", salonId = "salon-1", name = "Karan Kapoor", phone = "9820111111", role = "Senior Stylist", isActive = true),
-                    Staff(id = "st-2", salonId = "salon-1", name = "Pooja Nair", phone = "9820222222", role = "Colorist & Spa", isActive = true),
-                    Staff(id = "st-3", salonId = "salon-1", name = "Ramesh Gurung", phone = "9820333333", role = "Master Barber", isActive = true),
-                    Staff(id = "st-4", salonId = "salon-1", name = "Simran Kaur", phone = "9820444444", role = "Beauty & Skin", isActive = true)
-                )
-            )
-        }
-
-        if (localServices.isEmpty()) {
-            localServices.addAll(
-                listOf(
-                    SalonService(id = "srv-1", salonId = "salon-1", name = "Haircut & Beard Styling", category = "Hair", price = 650.0, durationMins = 45, isActive = true),
-                    SalonService(id = "srv-2", salonId = "salon-1", name = "Hair Spa & Blowdry", category = "Spa", price = 1800.0, durationMins = 60, isActive = true),
-                    SalonService(id = "srv-3", salonId = "salon-1", name = "Hair Color & Trim", category = "Color", price = 2200.0, durationMins = 90, isActive = true),
-                    SalonService(id = "srv-4", salonId = "salon-1", name = "Signature Facial", category = "Skin", price = 1500.0, durationMins = 60, isActive = true),
-                    SalonService(id = "srv-5", salonId = "salon-1", name = "Royal Shave", category = "Beard", price = 700.0, durationMins = 30, isActive = true),
-                    SalonService(id = "srv-6", salonId = "salon-1", name = "Quick Haircut", category = "Hair", price = 350.0, durationMins = 30, isActive = true)
-                )
-            )
-        }
-
-        if (localBookings.isEmpty()) {
-            val todayStr = getTodayDateString()
-            localBookings.addAll(
-                listOf(
-                    Booking(
-                        id = "bk-001",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-1",
-                        serviceName = "Haircut & Beard Styling",
-                        customerId = "c-101",
-                        customerName = "Vikram Patel",
-                        customerPhone = "9820112233",
-                        startTime = "${todayStr}T10:00:00",
-                        endTime = "${todayStr}T10:45:00",
-                        status = "completed",
-                        price = 650.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-002",
-                        staffId = "st-2",
-                        staffName = "Pooja Nair",
-                        serviceId = "srv-2",
-                        serviceName = "Hair Spa & Blowdry",
-                        customerId = "c-102",
-                        customerName = "Sneha Rao",
-                        customerPhone = "9819001122",
-                        startTime = "${todayStr}T11:30:00",
-                        endTime = "${todayStr}T12:30:00",
-                        status = "in_service",
-                        price = 1800.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-003",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-3",
-                        serviceName = "Hair Color & Trim",
-                        customerId = "c-103",
-                        customerName = "Rahul Sharma",
-                        customerPhone = "9822334455",
-                        startTime = "${todayStr}T14:00:00",
-                        endTime = "${todayStr}T15:00:00",
-                        status = "arrived",
-                        price = 2200.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-004",
-                        staffId = "st-4",
-                        staffName = "Simran Kaur",
-                        serviceId = "srv-4",
-                        serviceName = "Signature Facial",
-                        customerId = "c-104",
-                        customerName = "Ananya Deshmukh",
-                        customerPhone = "9833445566",
-                        startTime = "${todayStr}T16:15:00",
-                        endTime = "${todayStr}T17:00:00",
-                        status = "confirmed",
-                        price = 1500.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-005",
-                        staffId = "st-3",
-                        staffName = "Ramesh Gurung",
-                        serviceId = "srv-5",
-                        serviceName = "Royal Shave",
-                        customerId = "c-105",
-                        customerName = "Amit Verma",
-                        customerPhone = "9877889900",
-                        startTime = "${todayStr}T18:00:00",
-                        endTime = "${todayStr}T18:30:00",
-                        status = "confirmed",
-                        price = 700.0,
-                        source = "online"
-                    ),
-                    // Tomorrow Bookings
-                    Booking(
-                        id = "bk-101",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-1",
-                        serviceName = "Haircut & Beard Styling",
-                        customerId = "c-101",
-                        customerName = "Vikram Patel",
-                        customerPhone = "9820112233",
-                        startTime = "${getDateOffset(1)}T11:00:00",
-                        endTime = "${getDateOffset(1)}T11:45:00",
-                        status = "confirmed",
-                        price = 650.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-102",
-                        staffId = "st-2",
-                        staffName = "Pooja Nair",
-                        serviceId = "srv-3",
-                        serviceName = "Hair Color & Trim",
-                        customerId = "c-106",
-                        customerName = "Meera Joshi",
-                        customerPhone = "9820998877",
-                        startTime = "${getDateOffset(1)}T14:30:00",
-                        endTime = "${getDateOffset(1)}T16:00:00",
-                        status = "confirmed",
-                        price = 2200.0,
-                        source = "online"
-                    ),
-                    // Upcoming +2 days
-                    Booking(
-                        id = "bk-103",
-                        staffId = "st-4",
-                        staffName = "Simran Kaur",
-                        serviceId = "srv-4",
-                        serviceName = "Signature Facial",
-                        customerId = "c-104",
-                        customerName = "Ananya Deshmukh",
-                        customerPhone = "9833445566",
-                        startTime = "${getDateOffset(2)}T13:00:00",
-                        endTime = "${getDateOffset(2)}T13:50:00",
-                        status = "confirmed",
-                        price = 1500.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-104",
-                        staffId = "st-3",
-                        staffName = "Ramesh Gurung",
-                        serviceId = "srv-6",
-                        serviceName = "Quick Haircut",
-                        customerId = "c-107",
-                        customerName = "Aditya Chopra",
-                        customerPhone = "9820556677",
-                        startTime = "${getDateOffset(2)}T16:00:00",
-                        endTime = "${getDateOffset(2)}T16:30:00",
-                        status = "confirmed",
-                        price = 350.0,
-                        source = "walk_in"
-                    ),
-                    // Upcoming +4 days
-                    Booking(
-                        id = "bk-105",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-2",
-                        serviceName = "Hair Spa & Blowdry",
-                        customerId = "c-102",
-                        customerName = "Sneha Rao",
-                        customerPhone = "9819001122",
-                        startTime = "${getDateOffset(4)}T15:30:00",
-                        endTime = "${getDateOffset(4)}T16:30:00",
-                        status = "confirmed",
-                        price = 1800.0,
-                        source = "online"
-                    ),
-                    // Past Bookings (-1 day)
-                    Booking(
-                        id = "bk-090",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-1",
-                        serviceName = "Haircut & Beard Styling",
-                        customerId = "c-108",
-                        customerName = "Manish Tiwari",
-                        customerPhone = "9819112244",
-                        startTime = "${getDateOffset(-1)}T10:00:00",
-                        endTime = "${getDateOffset(-1)}T10:45:00",
-                        status = "completed",
-                        price = 650.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-091",
-                        staffId = "st-2",
-                        staffName = "Pooja Nair",
-                        serviceId = "srv-3",
-                        serviceName = "Hair Color & Trim",
-                        customerId = "c-109",
-                        customerName = "Sunita Gupta",
-                        customerPhone = "9820776655",
-                        startTime = "${getDateOffset(-1)}T14:00:00",
-                        endTime = "${getDateOffset(-1)}T15:30:00",
-                        status = "cancelled",
-                        price = 2200.0,
-                        source = "online"
-                    ),
-                    // Past Bookings (-3 days)
-                    Booking(
-                        id = "bk-085",
-                        staffId = "st-4",
-                        staffName = "Simran Kaur",
-                        serviceId = "srv-4",
-                        serviceName = "Signature Facial",
-                        customerId = "c-102",
-                        customerName = "Sneha Rao",
-                        customerPhone = "9819001122",
-                        startTime = "${getDateOffset(-3)}T12:00:00",
-                        endTime = "${getDateOffset(-3)}T12:50:00",
-                        status = "completed",
-                        price = 1500.0,
-                        source = "online"
-                    ),
-                    Booking(
-                        id = "bk-086",
-                        staffId = "st-3",
-                        staffName = "Ramesh Gurung",
-                        serviceId = "srv-5",
-                        serviceName = "Royal Shave",
-                        customerId = "c-110",
-                        customerName = "Rajesh Khurana",
-                        customerPhone = "9877001122",
-                        startTime = "${getDateOffset(-3)}T17:00:00",
-                        endTime = "${getDateOffset(-3)}T17:30:00",
-                        status = "no_show",
-                        price = 700.0,
-                        source = "online"
-                    ),
-                    // Past Bookings (-7 days)
-                    Booking(
-                        id = "bk-075",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        serviceId = "srv-1",
-                        serviceName = "Haircut & Beard Styling",
-                        customerId = "c-101",
-                        customerName = "Vikram Patel",
-                        customerPhone = "9820112233",
-                        startTime = "${getDateOffset(-7)}T11:00:00",
-                        endTime = "${getDateOffset(-7)}T11:45:00",
-                        status = "completed",
-                        price = 650.0,
-                        source = "online"
-                    )
-                )
-            )
-        }
-
-        if (localRecurringBreaks.isEmpty()) {
-            localRecurringBreaks.addAll(
-                listOf(
-                    RecurringBreak(
-                        id = "rb-1",
-                        salonId = "salon-1",
-                        staffId = null,
-                        staffName = "Whole Salon",
-                        dayOfWeek = null,
-                        startTime = "14:00",
-                        endTime = "15:00",
-                        label = "Lunch Break"
-                    ),
-                    RecurringBreak(
-                        id = "rb-2",
-                        salonId = "salon-1",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        dayOfWeek = 5,
-                        startTime = "17:00",
-                        endTime = "18:00",
-                        label = "Weekly Styling Training"
-                    )
-                )
-            )
-        }
-
-        if (localStaffTimeOff.isEmpty()) {
-            localStaffTimeOff.addAll(
-                listOf(
-                    StaffTimeOff(
-                        id = "to-1",
-                        salonId = "salon-1",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        startTime = "${getDateOffset(7)}T09:00:00",
-                        endTime = "${getDateOffset(7)}T20:00:00",
-                        reason = "Personal Leave"
-                    ),
-                    StaffTimeOff(
-                        id = "to-2",
-                        salonId = "salon-1",
-                        staffId = null,
-                        staffName = "Whole Salon",
-                        startTime = "${getDateOffset(10)}T09:00:00",
-                        endTime = "${getDateOffset(10)}T20:00:00",
-                        reason = "Festival Holiday"
-                    )
-                )
-            )
-        }
-
-        if (localCategories.isEmpty()) {
-            localCategories.addAll(
-                listOf(
-                    ServiceCategory("cat-1", "salon-1", "Hair Services", 1),
-                    ServiceCategory("cat-2", "salon-1", "Spa & Blowdry", 2),
-                    ServiceCategory("cat-3", "salon-1", "Skin & Facial", 3),
-                    ServiceCategory("cat-4", "salon-1", "Beard & Grooming", 4)
-                )
-            )
-        }
-
-        if (localStaffServices.isEmpty()) {
-            localStaffServices["srv-1"] = mutableListOf("st-1", "st-3")
-            localStaffServices["srv-2"] = mutableListOf("st-2")
-            localStaffServices["srv-3"] = mutableListOf("st-1", "st-2")
-            localStaffServices["srv-4"] = mutableListOf("st-4")
-            localStaffServices["srv-5"] = mutableListOf("st-3")
-            localStaffServices["srv-6"] = mutableListOf("st-1", "st-3")
-        }
-
-        if (localCombos.isEmpty()) {
-            localCombos.addAll(
-                listOf(
-                    Combo("cmb-1", "salon-1", "Groom Deluxe Package", 1200.0, true, listOf("srv-1", "srv-5"), 75),
-                    Combo("cmb-2", "salon-1", "Spa & Glow Package", 3000.0, true, listOf("srv-2", "srv-4"), 110)
-                )
-            )
-        }
-
-        if (localSalonHours.isEmpty()) {
-            for (day in 0..6) {
-                localSalonHours.add(
-                    SalonHours(
-                        id = "sh-$day",
-                        salonId = "salon-1",
-                        dayOfWeek = day,
-                        isClosed = false,
-                        openTime = "10:00",
-                        closeTime = "20:00"
-                    )
-                )
-            }
-        }
-
-        if (localStaffHours.isEmpty()) {
-            localStaff.forEach { st ->
-                val list = mutableListOf<StaffHours>()
-                val offDay = when (st.id) {
-                    "st-1" -> 2 // Tue
-                    "st-2" -> 1 // Mon
-                    "st-3" -> 3 // Wed
-                    else -> 4   // Thu
-                }
-                for (day in 0..6) {
-                    list.add(
-                        StaffHours(
-                            id = "sth-${st.id}-$day",
-                            staffId = st.id,
-                            dayOfWeek = day,
-                            isWorking = day != offDay,
-                            startTime = "10:00",
-                            endTime = "19:00"
-                        )
-                    )
-                }
-                localStaffHours[st.id] = list
-            }
-        }
-
-        if (localPayoutDetails.isEmpty()) {
-            localPayoutDetails["salon-1"] = SalonPayoutDetails(
-                id = "pod-1",
-                salonId = "salon-1",
-                accountHolderName = "Looks Unisex Salon Pvt Ltd",
-                upiId = "looks@okaxis",
-                bankAccountNumber = "987654321012",
-                bankIfsc = "UTIB0001234"
-            )
-        }
-
-        if (localReviews.isEmpty()) {
-            localReviews.addAll(
-                listOf(
-                    SalonReview(
-                        id = "rev-1",
-                        salonId = "salon-1",
-                        bookingId = "bk-090",
-                        customerId = "c-108",
-                        customerName = "Manish Tiwari",
-                        rating = 5.0,
-                        comment = "Karan did an exceptional haircut and beard styling! Extremely punctual and maintained strict hygiene standards.",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        ownerReply = "Thank you Manish! We are delighted to know you had a great experience with Karan.",
-                        createdAt = "${getDateOffset(-1)}T12:30:00"
-                    ),
-                    SalonReview(
-                        id = "rev-2",
-                        salonId = "salon-1",
-                        bookingId = "bk-085",
-                        customerId = "c-102",
-                        customerName = "Sneha Rao",
-                        rating = 5.0,
-                        comment = "The Signature Facial with Simran was heavenly. My skin feels fresh, radiant and glowing.",
-                        staffId = "st-4",
-                        staffName = "Simran Kaur",
-                        ownerReply = null, // Pending reply!
-                        createdAt = "${getDateOffset(-2)}T15:00:00"
-                    ),
-                    SalonReview(
-                        id = "rev-3",
-                        salonId = "salon-1",
-                        bookingId = "bk-075",
-                        customerId = "c-101",
-                        customerName = "Vikram Patel",
-                        rating = 4.0,
-                        comment = "Prompt service and skilled staff. The waiting lounge was clean with great ambiance.",
-                        staffId = "st-1",
-                        staffName = "Karan Kapoor",
-                        ownerReply = null, // Pending reply!
-                        createdAt = "${getDateOffset(-5)}T18:45:00"
-                    ),
-                    SalonReview(
-                        id = "rev-4",
-                        salonId = "salon-1",
-                        bookingId = "bk-060",
-                        customerId = "c-115",
-                        customerName = "Ananya Roy",
-                        rating = 5.0,
-                        comment = "Pooja's hair color consultation was spot on! Exactly the shade I wanted without any hair damage.",
-                        staffId = "st-2",
-                        staffName = "Pooja Nair",
-                        ownerReply = "Thank you Ananya for trusting Pooja with your hair color transformation!",
-                        createdAt = "${getDateOffset(-8)}T11:15:00"
-                    )
-                )
-            )
-        }
-
-        if (localNotifications.isEmpty()) {
-            localNotifications.addAll(
-                listOf(
-                    SalonNotification(
-                        id = "notif-1",
-                        userId = "owner-1",
-                        type = "new_booking",
-                        title = "New Booking Received",
-                        body = "Aman Gupta booked Haircut & Beard Styling for today at 4:00 PM with Karan Kapoor",
-                        bookingId = "bk-001",
-                        isRead = false,
-                        createdAt = "${getTodayDateString()}T09:15:00"
-                    ),
-                    SalonNotification(
-                        id = "notif-2",
-                        userId = "owner-1",
-                        type = "delay_alert",
-                        title = "Zero-Wait Delay Alert",
-                        body = "Stylist Karan Kapoor is estimated 10 mins delayed. Customer notified.",
-                        bookingId = "bk-001",
-                        isRead = false,
-                        createdAt = "${getTodayDateString()}T10:00:00"
-                    ),
-                    SalonNotification(
-                        id = "notif-3",
-                        userId = "owner-1",
-                        type = "reminder",
-                        title = "Upcoming Appointment Reminder",
-                        body = "Ritu Verma is scheduled for Hair Spa in 30 minutes with Pooja Nair.",
-                        bookingId = "bk-002",
-                        isRead = true,
-                        createdAt = "${getTodayDateString()}T11:00:00"
-                    ),
-                    SalonNotification(
-                        id = "notif-4",
-                        userId = "owner-1",
-                        type = "salon_approved",
-                        title = "Salon Approved & Live!",
-                        body = "Your business documents have been verified. Your salon is now officially open for bookings.",
-                        bookingId = null,
-                        isRead = true,
-                        createdAt = "${getDateOffset(-3)}T14:00:00"
-                    ),
-                    SalonNotification(
-                        id = "notif-5",
-                        userId = "owner-1",
-                        type = "late_credit",
-                        title = "Late Arrival Credit Applied",
-                        body = "Automatic late credit of ₹50 credited to Vikram Patel due to salon wait time.",
-                        bookingId = "bk-075",
-                        isRead = false,
-                        createdAt = "${getDateOffset(-1)}T16:20:00"
-                    )
-                )
-            )
+    private suspend fun <T> io(block: suspend () -> T): SalonResult<T> = withContext(Dispatchers.IO) {
+        try {
+            SalonResult.Success(block())
+        } catch (e: SupabaseException) {
+            SalonResult.Error(e.message ?: "Something went wrong. Please try again.")
+        } catch (e: org.json.JSONException) {
+            SalonResult.Error("Unexpected response from server. Please try again.")
         }
     }
 
+    /** The owner's salon id, loading it from the server when not cached yet. */
+    private suspend fun salonId(): String =
+        (authRepository.fetchSalonsNow() ?: authRepository.fetchSalons().firstOrNull())?.id
+            ?: throw SupabaseException("No salon found for this account.")
 
-    private fun getTodayDateString(): String {
-        return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-    }
+    private fun salonIdBlocking(): String =
+        authRepository.fetchSalonsNow()?.id ?: throw SupabaseException("No salon found for this account.")
 
-    private fun getDateOffset(days: Int): String {
-        val cal = Calendar.getInstance()
-        cal.add(Calendar.DAY_OF_YEAR, days)
-        return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
-    }
+    private fun <T> SalonResult<T>.orNull(): T? = (this as? SalonResult.Success<T>)?.data
 
-    // --- Part 1 RPCs ---
+    private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
+
+    private fun JSONObject.str(key: String): String? = optStringOrNull(key)
+
+    private fun nested(o: JSONObject, rel: String, key: String): String? = o.optJSONObject(rel)?.str(key)
+
+    // ======================= Registration & verification =======================
 
     suspend fun createMySalon(
         ownerName: String,
@@ -623,65 +85,26 @@ class SalonRepository(
         gstNumber: String?,
         language: String
     ): SalonResult<Salon> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        val newSalon = Salon(
-            id = UUID.randomUUID().toString(),
-            ownerId = authRepository.getUserId(),
-            name = name,
-            salonType = salonType,
-            address = address,
-            area = area,
-            city = city,
-            pincode = pincode,
-            phone = phone,
-            latitude = latitude,
-            longitude = longitude,
-            gstNumber = gstNumber?.ifBlank { null },
-            verificationStatus = "draft",
-            isActive = true
-        )
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            authRepository.saveLocalSalon(newSalon)
-            return@withContext SalonResult.Success(newSalon)
+        val result = io {
+            val params = JSONObject()
+                .put("p_owner_name", ownerName.trim())
+                .put("p_name", name.trim())
+                .put("p_salon_type", salonType.lowercase())
+                .put("p_address", address.trim())
+                .put("p_area", area.trim())
+                .put("p_city", city.trim())
+                .put("p_pincode", pincode.trim())
+                .put("p_phone", phone.trim())
+                .put("p_latitude", latitude ?: JSONObject.NULL)
+                .put("p_longitude", longitude ?: JSONObject.NULL)
+                .put("p_gst_number", gstNumber?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+                .put("p_language", if (language == "hi") "hi" else "en")
+            SupabaseHttp.rpc("create_my_salon", params)
         }
-
-        try {
-            val params = CreateMySalonParams(
-                ownerName = ownerName,
-                name = name,
-                salonType = salonType,
-                address = address,
-                area = area,
-                city = city,
-                pincode = pincode,
-                phone = phone,
-                latitude = latitude,
-                longitude = longitude,
-                gstNumber = gstNumber?.ifBlank { null },
-                language = language
-            )
-
-            val response = SupabaseClient.restApi.createMySalon(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = params
-            )
-
-            if (response.isSuccessful) {
-                val salons = authRepository.fetchSalons()
-                val created = salons.find { it.name == name } ?: newSalon
-                authRepository.saveLocalSalon(created)
-                SalonResult.Success(created)
-            } else {
-                authRepository.saveLocalSalon(newSalon)
-                SalonResult.Success(newSalon)
-            }
-        } catch (_: Exception) {
-            authRepository.saveLocalSalon(newSalon)
-            SalonResult.Success(newSalon)
+        when (result) {
+            is SalonResult.Error -> SalonResult.Error(result.message)
+            is SalonResult.Success -> authRepository.fetchSalons().firstOrNull()?.let { SalonResult.Success(it) }
+                ?: SalonResult.Error("Salon was created but could not be loaded. Please refresh.")
         }
     }
 
@@ -692,285 +115,81 @@ class SalonRepository(
         fileBytes: ByteArray,
         mimeType: String,
         acceptTerms: Boolean
-    ): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        if (!acceptTerms) {
-            return@withContext SalonResult.Error("Please accept the terms and conditions to proceed.")
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val userId = authRepository.getUserId() ?: UUID.randomUUID().toString()
-        val filePath = "$userId/$fileName"
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            val salons = authRepository.fetchSalons()
-            val existing = salons.firstOrNull()
-            if (existing != null) {
-                val updated = existing.copy(verificationStatus = "pending", rejectionReason = null)
-                authRepository.saveLocalSalon(updated)
-            }
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            val mediaType = mimeType.toMediaTypeOrNull() ?: "application/octet-stream".toMediaTypeOrNull()!!
-            val body = fileBytes.toRequestBody(mediaType)
-            SupabaseClient.restApi.uploadDocument(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                contentType = mimeType,
-                filePath = filePath,
-                fileData = body
+    ): SalonResult<Unit> {
+        if (!acceptTerms) return SalonResult.Error("Please accept the terms and conditions to proceed.")
+        if (fileBytes.isEmpty()) return SalonResult.Error("Please choose a document to upload.")
+        val realSalonId = runCatching { salonId() }.getOrNull() ?: salonId
+        return io {
+            val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
+            val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80)
+            val path = "$uid/${System.currentTimeMillis()}_$safeName"
+            SupabaseHttp.upload("salon-documents", path, fileBytes, mimeType)
+            SupabaseHttp.insert(
+                "salon_documents",
+                JSONObject().put("salon_id", realSalonId).put("doc_type", docType).put("file_path", path)
             )
-
-            val doc = SalonDocument(
-                salonId = salonId,
-                docType = docType,
-                filePath = filePath
-            )
-            SupabaseClient.restApi.insertSalonDocument(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                document = doc
-            )
-
-            val verifyRes = SupabaseClient.restApi.submitSalonForVerification(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = SubmitVerificationParams(acceptTerms = true)
-            )
-
-            if (verifyRes.isSuccessful) {
-                val salons = authRepository.fetchSalons()
-                val updated = salons.find { it.id == salonId }
-                    ?: salons.firstOrNull()?.copy(verificationStatus = "pending")
-                if (updated != null) authRepository.saveLocalSalon(updated)
-                SalonResult.Success(Unit)
-            } else {
-                val errBody = verifyRes.errorBody()?.string() ?: ""
-                val friendlyMessage = when {
-                    errBody.contains("document", ignoreCase = true) -> "Please upload at least one document."
-                    errBody.contains("terms", ignoreCase = true) -> "Please accept the terms and conditions."
-                    else -> errBody.ifBlank { "Could not submit verification. Please try again." }
-                }
-                SalonResult.Error(friendlyMessage)
-            }
-        } catch (_: Exception) {
-            val salons = authRepository.fetchSalons()
-            val existing = salons.firstOrNull()
-            if (existing != null) {
-                val updated = existing.copy(verificationStatus = "pending")
-                authRepository.saveLocalSalon(updated)
-            }
-            SalonResult.Success(Unit)
+            SupabaseHttp.rpc("submit_salon_for_verification", JSONObject().put("p_accept_terms", true))
+            Unit
         }
     }
 
-    suspend fun refreshSalonStatus(): Salon? = withContext(Dispatchers.IO) {
-        val salons = authRepository.fetchSalons()
-        salons.firstOrNull()
-    }
+    suspend fun refreshSalonStatus(): Salon? = authRepository.fetchSalons().firstOrNull()
 
-    fun simulateAdminDecision(status: String, reason: String? = null) {
-        val current = authRepository.fetchSalonsNow() ?: return
-        val updated = current.copy(
-            verificationStatus = status,
-            rejectionReason = reason
+    // ======================= Dashboard & bookings =======================
+
+    suspend fun getOwnerDashboard(): SalonResult<OwnerDashboard> = io {
+        val o = JSONObject(SupabaseHttp.rpc("get_owner_dashboard", single = true))
+        OwnerDashboard(
+            todayBookings = o.optInt("today_bookings"),
+            todayCompleted = o.optInt("today_completed"),
+            todayUpcoming = o.optInt("today_upcoming"),
+            todayRevenue = o.optDouble("today_revenue", 0.0),
+            todayNoShows = o.optInt("today_no_shows"),
+            pendingReviewsReply = o.optInt("pending_reviews_reply"),
+            salonName = o.str("salon_name"),
+            verificationStatus = o.str("verification_status"),
+            isActive = o.optBoolean("is_active", true)
         )
-        authRepository.saveLocalSalon(updated)
     }
 
-    // --- Part 2: Dashboard & Bookings ---
-
-    suspend fun getOwnerDashboard(): SalonResult<OwnerDashboard> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val salon = authRepository.fetchSalonsNow()
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            val completed = localBookings.count { it.status == "completed" }
-            val upcoming = localBookings.count { it.status == "confirmed" || it.status == "arrived" || it.status == "in_service" }
-            val noShows = localBookings.count { it.status == "no_show" }
-            val revenue = localBookings.filter { it.status == "completed" }.sumOf { it.price ?: 0.0 }
-            return@withContext SalonResult.Success(
-                OwnerDashboard(
-                    todayBookings = localBookings.size,
-                    todayCompleted = completed,
-                    todayUpcoming = upcoming,
-                    todayRevenue = revenue,
-                    todayNoShows = noShows,
-                    pendingReviewsReply = 2,
-                    salonName = salon?.name ?: "Looks Unisex Salon",
-                    verificationStatus = salon?.verificationStatus ?: "approved",
-                    isActive = salon?.isActive ?: true
-                )
-            )
-        }
-
-        try {
-            val response = SupabaseClient.restApi.getOwnerDashboard(
-                apiKey = anonKey,
-                authHeader = "Bearer $token"
-            )
-            if (response.isSuccessful && response.body() != null) {
-                SalonResult.Success(response.body()!!)
-            } else {
-                // Compute from local/cached stats
-                val completed = localBookings.count { it.status == "completed" }
-                val upcoming = localBookings.count { it.status == "confirmed" || it.status == "arrived" || it.status == "in_service" }
-                val noShows = localBookings.count { it.status == "no_show" }
-                val revenue = localBookings.filter { it.status == "completed" }.sumOf { it.price ?: 0.0 }
-                SalonResult.Success(
-                    OwnerDashboard(
-                        todayBookings = localBookings.size,
-                        todayCompleted = completed,
-                        todayUpcoming = upcoming,
-                        todayRevenue = revenue,
-                        todayNoShows = noShows,
-                        pendingReviewsReply = 2,
-                        salonName = salon?.name ?: "Looks Unisex Salon",
-                        verificationStatus = salon?.verificationStatus ?: "approved",
-                        isActive = salon?.isActive ?: true
-                    )
-                )
-            }
-        } catch (_: Exception) {
-            val completed = localBookings.count { it.status == "completed" }
-            val upcoming = localBookings.count { it.status == "confirmed" || it.status == "arrived" || it.status == "in_service" }
-            val noShows = localBookings.count { it.status == "no_show" }
-            val revenue = localBookings.filter { it.status == "completed" }.sumOf { it.price ?: 0.0 }
-            SalonResult.Success(
-                OwnerDashboard(
-                    todayBookings = localBookings.size,
-                    todayCompleted = completed,
-                    todayUpcoming = upcoming,
-                    todayRevenue = revenue,
-                    todayNoShows = noShows,
-                    pendingReviewsReply = 2,
-                    salonName = salon?.name ?: "Looks Unisex Salon",
-                    verificationStatus = salon?.verificationStatus ?: "approved",
-                    isActive = salon?.isActive ?: true
-                )
-            )
-        }
+    private fun parseBooking(o: JSONObject, idKey: String = "id"): Booking {
+        val start = IstTime.toLocal(o.str("start_time")).orEmpty()
+        val end = IstTime.toLocal(o.str("end_time"))
+        return Booking(
+            id = o.getString(idKey),
+            staffId = o.str("staff_id"),
+            staffName = o.str("staff_name"),
+            serviceId = o.str("service_id"),
+            serviceName = o.str("service_name"),
+            durationMinutes = null,
+            customerId = o.str("customer_id"),
+            customerName = o.str("customer_name"),
+            customerPhone = o.str("customer_phone"),
+            startTime = start,
+            endTime = end,
+            status = o.optString("status", "confirmed"),
+            price = o.optDouble("price", 0.0),
+            source = o.str("source"),
+            notes = o.str("notes")
+        )
     }
 
     suspend fun getOwnerBookings(
         fromDate: String? = null,
         toDate: String? = null,
         staffId: String? = null
-    ): SalonResult<List<Booking>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val defaultFrom = fromDate ?: getTodayDateString()
-        val defaultTo = toDate ?: defaultFrom
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            val filtered = localBookings.filter { booking ->
-                val bDate = if (booking.startTime.contains("T")) booking.startTime.substringBefore("T") else booking.startTime.take(10)
-                val inDateRange = bDate in defaultFrom..defaultTo
-                val matchesStaff = if (staffId == null || staffId == "all" || staffId.isBlank()) true else booking.staffId == staffId
-                inDateRange && matchesStaff
-            }
-            return@withContext SalonResult.Success(filtered.sortedBy { it.startTime })
-        }
-
-        try {
-            val response = SupabaseClient.restApi.getOwnerBookings(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = GetOwnerBookingsParams(
-                    fromDate = defaultFrom,
-                    toDate = defaultTo,
-                    staffId = if (staffId == "all" || staffId.isNullOrBlank()) null else staffId
-                )
-            )
-            if (response.isSuccessful && response.body() != null) {
-                val list = response.body()!!
-                if (list.isNotEmpty()) {
-                    SalonResult.Success(list.sortedBy { it.startTime })
-                } else {
-                    val filtered = localBookings.filter { booking ->
-                        val bDate = if (booking.startTime.contains("T")) booking.startTime.substringBefore("T") else booking.startTime.take(10)
-                        val inDateRange = bDate in defaultFrom..defaultTo
-                        val matchesStaff = if (staffId == null || staffId == "all" || staffId.isBlank()) true else booking.staffId == staffId
-                        inDateRange && matchesStaff
-                    }
-                    SalonResult.Success(filtered.sortedBy { it.startTime })
-                }
-            } else {
-                val filtered = localBookings.filter { booking ->
-                    val bDate = if (booking.startTime.contains("T")) booking.startTime.substringBefore("T") else booking.startTime.take(10)
-                    val inDateRange = bDate in defaultFrom..defaultTo
-                    val matchesStaff = if (staffId == null || staffId == "all" || staffId.isBlank()) true else booking.staffId == staffId
-                    inDateRange && matchesStaff
-                }
-                SalonResult.Success(filtered.sortedBy { it.startTime })
-            }
-        } catch (_: Exception) {
-            val filtered = localBookings.filter { booking ->
-                val bDate = if (booking.startTime.contains("T")) booking.startTime.substringBefore("T") else booking.startTime.take(10)
-                val inDateRange = bDate in defaultFrom..defaultTo
-                val matchesStaff = if (staffId == null || staffId == "all" || staffId.isBlank()) true else booking.staffId == staffId
-                inDateRange && matchesStaff
-            }
-            SalonResult.Success(filtered.sortedBy { it.startTime })
-        }
+    ): SalonResult<List<Booking>> = io {
+        val from = fromDate ?: IstTime.today()
+        val params = JSONObject()
+            .put("p_from", from)
+            .put("p_to", toDate ?: from)
+            .put("p_staff_id", staffId?.takeIf { it.isNotBlank() && it != "all" } ?: JSONObject.NULL)
+        JSONArray(SupabaseHttp.rpc("get_owner_bookings", params)).objects().map { parseBooking(it) }
     }
 
-    suspend fun updateBookingStatus(bookingId: String, newStatus: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        // 1. Update in local list
-        val index = localBookings.indexOfFirst { it.id == bookingId }
-        if (index != -1) {
-            val current = localBookings[index]
-            // Validate allowed transitions:
-            // confirmed -> arrived, cancelled, no_show
-            // arrived -> in_service, cancelled
-            // in_service -> completed
-            val valid = when (current.status) {
-                "confirmed" -> newStatus in listOf("arrived", "cancelled", "no_show")
-                "arrived" -> newStatus in listOf("in_service", "cancelled")
-                "in_service" -> newStatus == "completed"
-                else -> false
-            }
-
-            if (!valid) {
-                return@withContext SalonResult.Error("Cannot transition booking from '${current.status}' to '$newStatus'.")
-            }
-
-            localBookings[index] = current.copy(status = newStatus)
-        }
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            val response = SupabaseClient.restApi.updateBookingStatus(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$bookingId",
-                body = UpdateBookingStatusRequest(status = newStatus)
-            )
-
-            if (response.isSuccessful) {
-                SalonResult.Success(Unit)
-            } else {
-                val errBody = response.errorBody()?.string() ?: ""
-                val msg = when {
-                    errBody.contains("validate_booking_status", ignoreCase = true) ||
-                            errBody.contains("transition", ignoreCase = true) ->
-                        "Invalid status transition: Cannot change to $newStatus."
-                    else -> errBody.ifBlank { "Could not update status ($newStatus)" }
-                }
-                SalonResult.Error(msg)
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun updateBookingStatus(bookingId: String, newStatus: String): SalonResult<Unit> = io {
+        val rows = SupabaseHttp.update("bookings", "id=eq.$bookingId", JSONObject().put("status", newStatus))
+        if (rows.length() == 0) throw SupabaseException("Booking not found.")
     }
 
     suspend fun createWalkInBooking(
@@ -978,288 +197,108 @@ class SalonRepository(
         serviceId: String,
         customerName: String,
         customerPhone: String?
-    ): SalonResult<Booking> = withContext(Dispatchers.IO) {
-        if (customerName.isBlank()) {
-            return@withContext SalonResult.Error("Customer name is required.")
-        }
+    ): SalonResult<Booking> = io {
+        if (customerName.isBlank()) throw SupabaseException("Please enter the customer's name.")
+        val params = JSONObject()
+            .put("p_staff_id", staffId)
+            .put("p_service_id", serviceId)
+            .put("p_name", customerName.trim())
+            .put("p_phone", customerPhone?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+        val id = SupabaseHttp.rpc("create_walk_in_booking", params).trim().trim('"')
+        val today = IstTime.today()
+        val todays = JSONArray(
+            SupabaseHttp.rpc("get_owner_bookings", JSONObject().put("p_from", today).put("p_to", today).put("p_staff_id", JSONObject.NULL))
+        ).objects().map { parseBooking(it) }
+        todays.firstOrNull { it.id == id }
+            ?: Booking(id = id, staffId = staffId, serviceId = serviceId, customerName = customerName, customerPhone = customerPhone,
+                startTime = IstTime.toLocal(java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US).format(java.util.Date())).orEmpty(),
+                status = "arrived", source = "walk_in")
+    }
 
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
+    suspend fun updateSalonActive(isActive: Boolean): SalonResult<Unit> = io {
+        val id = salonIdBlocking()
+        val rows = SupabaseHttp.update("salons", "id=eq.$id", JSONObject().put("is_active", isActive))
+        rows.objects().firstOrNull()?.let { authRepository.saveLocalSalon(AuthRepository.parseSalon(it)) }
+        Unit
+    }
 
-        val staff = localStaff.find { it.id == staffId } ?: localStaff.firstOrNull()
-        val service = localServices.find { it.id == serviceId } ?: localServices.firstOrNull()
+    private fun parseStaff(o: JSONObject) = Staff(
+        id = o.getString("id"),
+        salonId = o.str("salon_id"),
+        name = o.optString("name"),
+        photoUrl = o.str("photo_url"),
+        commissionPercent = o.optDouble("commission_percent", 0.0),
+        ratingAvg = o.optDouble("rating_avg", 0.0),
+        ratingCount = o.optInt("rating_count", 0),
+        isActive = o.optBoolean("is_active", true)
+    )
 
-        val todayStr = getTodayDateString()
-        val nowTimeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val newBooking = Booking(
-            id = "walkin-${System.currentTimeMillis()}",
-            staffId = staff?.id ?: staffId,
-            staffName = staff?.name ?: "Stylist",
-            serviceId = service?.id ?: serviceId,
-            serviceName = service?.name ?: "Salon Service",
-            customerName = customerName.trim(),
-            customerPhone = customerPhone?.trim()?.ifBlank { null },
-            startTime = "${todayStr}T$nowTimeStr",
-            status = "confirmed",
-            price = service?.price ?: 500.0,
-            source = "walk_in"
+    private fun parseService(o: JSONObject): SalonService {
+        val links = o.optJSONArray("staff_services") ?: JSONArray()
+        return SalonService(
+            id = o.getString("id"),
+            salonId = o.str("salon_id"),
+            categoryId = o.str("category_id"),
+            name = o.optString("name"),
+            category = nested(o, "service_categories", "name"),
+            price = o.optDouble("price", 0.0),
+            durationMins = o.optInt("duration_minutes", 30),
+            bufferMins = o.optInt("buffer_minutes", 0),
+            isActive = o.optBoolean("is_active", true),
+            assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") }
         )
-
-        localBookings.add(0, newBooking)
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(newBooking)
-        }
-
-        try {
-            val response = SupabaseClient.restApi.createWalkInBooking(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = CreateWalkInParams(
-                    staffId = staffId,
-                    serviceId = serviceId,
-                    name = customerName.trim(),
-                    phone = customerPhone?.trim()?.ifBlank { null }
-                )
-            )
-
-            if (response.isSuccessful) {
-                SalonResult.Success(newBooking)
-            } else {
-                val errBody = response.errorBody()?.string() ?: ""
-                val msg = if (errBody.contains("busy", ignoreCase = true)) {
-                    "Stylist is busy at that time."
-                } else {
-                    errBody.ifBlank { "Could not book walk-in. Please try another stylist." }
-                }
-                SalonResult.Error(msg)
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(newBooking)
-        }
     }
 
-    suspend fun updateSalonActive(isActive: Boolean): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val salon = authRepository.fetchSalonsNow()
-        if (salon != null) {
-            val updated = salon.copy(isActive = isActive)
-            authRepository.saveLocalSalon(updated)
-        }
+    /** Active staff of the owner's salon. */
+    suspend fun getStaff(): List<Staff> =
+        io { SupabaseHttp.select("staff?salon_id=eq.${salonId()}&is_active=eq.true&select=*&order=name").objects().map(::parseStaff) }
+            .orNull() ?: emptyList()
 
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val salonId = salon?.id ?: return@withContext SalonResult.Success(Unit)
+    /** Active services of the owner's salon, with stylist assignments and category name. */
+    suspend fun getServices(): List<SalonService> =
+        io {
+            SupabaseHttp.select(
+                "services?salon_id=eq.${salonId()}&is_active=eq.true" +
+                    "&select=*,staff_services(staff_id),service_categories(name)&order=name"
+            ).objects().map(::parseService)
+        }.orNull() ?: emptyList()
 
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.updateSalonActive(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$salonId",
-                body = UpdateSalonsActiveRequest(isActive = isActive)
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun getCustomerSummary(bookingId: String): SalonResult<CustomerSummary> = io {
+        val o = JSONObject(SupabaseHttp.rpc("get_customer_summary", JSONObject().put("p_booking_id", bookingId), single = true))
+        CustomerSummary(
+            totalVisits = o.optInt("total_visits"),
+            noShowCount = o.optInt("no_show_count"),
+            totalSpent = o.optDouble("total_spent", 0.0),
+            lastVisitDate = IstTime.toLocal(o.str("last_visit"))?.take(10),
+            customerName = o.str("customer_name"),
+            customerPhone = o.str("customer_phone")
+        )
     }
 
-    suspend fun getStaff(): List<Staff> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext localStaff
-        }
-
-        try {
-            val res = SupabaseClient.restApi.getStaff(apiKey = anonKey, authHeader = "Bearer $token")
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                res.body()!!
-            } else {
-                localStaff
-            }
-        } catch (_: Exception) {
-            localStaff
-        }
+    suspend fun rescheduleBooking(bookingId: String, newStartTime: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc(
+            "reschedule_booking",
+            JSONObject().put("p_booking_id", bookingId).put("p_new_start", IstTime.toOffset(newStartTime))
+        )
+        Unit
     }
 
-    suspend fun getServices(): List<SalonService> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext localServices
-        }
+    // ======================= Breaks & time off =======================
 
-        try {
-            val res = SupabaseClient.restApi.getServices(apiKey = anonKey, authHeader = "Bearer $token")
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                res.body()!!
-            } else {
-                localServices
-            }
-        } catch (_: Exception) {
-            localServices
-        }
-    }
-
-    // --- Part 3: Customer History, Reschedule & Staff Time Off ---
-
-    suspend fun getCustomerSummary(bookingId: String): SalonResult<CustomerSummary> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        val booking = localBookings.find { it.id == bookingId }
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            val customerName = booking?.customerName ?: "Customer"
-            val customerPhone = booking?.customerPhone
-            val customerBookings = localBookings.filter {
-                (!customerPhone.isNullOrBlank() && it.customerPhone == customerPhone) ||
-                (it.customerName.equals(customerName, ignoreCase = true))
-            }
-            val totalVisits = maxOf(customerBookings.size, 3)
-            val noShows = customerBookings.count { it.status == "no_show" }
-            val totalSpent = customerBookings.filter { it.status == "completed" }.sumOf { it.price ?: 0.0 }.let {
-                if (it == 0.0) 2450.0 else it
-            }
-            val lastVisit = customerBookings.filter { it.status == "completed" }.maxByOrNull { it.startTime }?.startTime?.substringBefore("T")
-                ?: getDateOffset(-7)
-
-            return@withContext SalonResult.Success(
-                CustomerSummary(
-                    totalVisits = totalVisits,
-                    noShowCount = noShows,
-                    totalSpent = totalSpent,
-                    lastVisitDate = lastVisit,
-                    customerName = customerName,
-                    customerPhone = customerPhone
-                )
-            )
-        }
-
-        try {
-            val response = SupabaseClient.restApi.getCustomerSummary(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = CustomerSummaryParams(bookingId = bookingId)
-            )
-            if (response.isSuccessful && response.body() != null) {
-                SalonResult.Success(response.body()!!)
-            } else {
-                val customerName = booking?.customerName ?: "Customer"
-                val customerPhone = booking?.customerPhone
-                val customerBookings = localBookings.filter {
-                    (!customerPhone.isNullOrBlank() && it.customerPhone == customerPhone) ||
-                    (it.customerName.equals(customerName, ignoreCase = true))
-                }
-                SalonResult.Success(
-                    CustomerSummary(
-                        totalVisits = maxOf(customerBookings.size, 3),
-                        noShowCount = customerBookings.count { it.status == "no_show" },
-                        totalSpent = 2450.0,
-                        lastVisitDate = getDateOffset(-7),
-                        customerName = customerName,
-                        customerPhone = customerPhone
-                    )
+    suspend fun getRecurringBreaks(): SalonResult<List<RecurringBreak>> = io {
+        SupabaseHttp.select("recurring_breaks?salon_id=eq.${salonId()}&select=*,staff(name)&order=day_of_week.asc.nullsfirst,start_time.asc")
+            .objects().map { o ->
+                RecurringBreak(
+                    id = o.getString("id"),
+                    salonId = o.str("salon_id"),
+                    staffId = o.str("staff_id"),
+                    staffName = nested(o, "staff", "name") ?: "Whole Salon",
+                    dayOfWeek = if (o.isNull("day_of_week")) null else o.optInt("day_of_week"),
+                    startTime = IstTime.hhmm(o.str("start_time")),
+                    endTime = IstTime.hhmm(o.str("end_time")),
+                    label = o.optString("label", "Break")
                 )
             }
-        } catch (_: Exception) {
-            val customerName = booking?.customerName ?: "Customer"
-            val customerPhone = booking?.customerPhone
-            SalonResult.Success(
-                CustomerSummary(
-                    totalVisits = 3,
-                    noShowCount = 0,
-                    totalSpent = 2450.0,
-                    lastVisitDate = getDateOffset(-7),
-                    customerName = customerName,
-                    customerPhone = customerPhone
-                )
-            )
-        }
-    }
-
-    suspend fun rescheduleBooking(bookingId: String, newStartTime: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        // 1. Update in local list
-        val index = localBookings.indexOfFirst { it.id == bookingId }
-        if (index != -1) {
-            val current = localBookings[index]
-            val newEndTime = try {
-                val datePart = newStartTime.substringBefore("T")
-                val timePart = newStartTime.substringAfter("T")
-                val parts = timePart.split(":")
-                val hour = parts[0].toInt()
-                val min = parts.getOrNull(1)?.toInt() ?: 0
-                val totalMins = hour * 60 + min + 45
-                val newH = (totalMins / 60) % 24
-                val newM = totalMins % 60
-                String.format(Locale.getDefault(), "%sT%02d:%02d:00", datePart, newH, newM)
-            } catch (_: Exception) {
-                null
-            }
-            localBookings[index] = current.copy(
-                startTime = newStartTime,
-                endTime = newEndTime ?: current.endTime,
-                status = "confirmed"
-            )
-        }
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.rescheduleBooking(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = RescheduleBookingParams(
-                    bookingId = bookingId,
-                    newStart = newStartTime
-                )
-            )
-            if (res.isSuccessful) {
-                SalonResult.Success(Unit)
-            } else {
-                val err = res.errorBody()?.string() ?: ""
-                SalonResult.Error(err.ifBlank { "Could not reschedule booking. Please try another time." })
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
-    }
-
-    suspend fun getRecurringBreaks(): SalonResult<List<RecurringBreak>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val salon = authRepository.fetchSalonsNow()
-        val salonId = salon?.id ?: "salon-1"
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(localRecurringBreaks.toList())
-        }
-
-        try {
-            val res = SupabaseClient.restApi.getRecurringBreaks(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                salonIdFilter = "eq.$salonId"
-            )
-            if (res.isSuccessful && res.body() != null) {
-                val list = res.body()!!
-                if (list.isNotEmpty()) SalonResult.Success(list)
-                else SalonResult.Success(localRecurringBreaks.toList())
-            } else {
-                SalonResult.Success(localRecurringBreaks.toList())
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(localRecurringBreaks.toList())
-        }
     }
 
     suspend fun addRecurringBreak(
@@ -1268,93 +307,48 @@ class SalonRepository(
         startTime: String,
         endTime: String,
         label: String
-    ): SalonResult<RecurringBreak> = withContext(Dispatchers.IO) {
-        val salon = authRepository.fetchSalonsNow()
-        val salonId = salon?.id ?: "salon-1"
-        val staffName = if (staffId.isNullOrBlank() || staffId == "all") "Whole Salon"
-        else localStaff.find { it.id == staffId }?.name ?: "Stylist"
-
-        val item = RecurringBreak(
-            id = "rb-${UUID.randomUUID()}",
-            salonId = salonId,
-            staffId = if (staffId == "all" || staffId.isNullOrBlank()) null else staffId,
-            staffName = staffName,
-            dayOfWeek = dayOfWeek,
-            startTime = startTime,
-            endTime = endTime,
-            label = label
+    ): SalonResult<RecurringBreak> = io {
+        if (endTime <= startTime) throw SupabaseException("End time must be after start time.")
+        val body = JSONObject()
+            .put("salon_id", salonIdBlocking())
+            .put("staff_id", staffId?.takeIf { it.isNotBlank() && it != "all" } ?: JSONObject.NULL)
+            .put("day_of_week", dayOfWeek ?: JSONObject.NULL)
+            .put("start_time", startTime)
+            .put("end_time", endTime)
+            .put("label", label.trim().ifBlank { "Break" })
+        val o = SupabaseHttp.insert("recurring_breaks", body).getJSONObject(0)
+        RecurringBreak(
+            id = o.getString("id"),
+            salonId = o.str("salon_id"),
+            staffId = o.str("staff_id"),
+            dayOfWeek = if (o.isNull("day_of_week")) null else o.optInt("day_of_week"),
+            startTime = IstTime.hhmm(o.str("start_time")),
+            endTime = IstTime.hhmm(o.str("end_time")),
+            label = o.optString("label", "Break")
         )
-
-        localRecurringBreaks.add(item)
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(item)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.insertRecurringBreak(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                recurringBreak = item
-            )
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                SalonResult.Success(res.body()!!.first())
-            } else {
-                SalonResult.Success(item)
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(item)
-        }
     }
 
-    suspend fun deleteRecurringBreak(id: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localRecurringBreaks.removeAll { it.id == id }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.deleteRecurringBreak(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$id"
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun deleteRecurringBreak(id: String): SalonResult<Unit> = io {
+        SupabaseHttp.delete("recurring_breaks", "id=eq.$id")
+        Unit
     }
 
-    suspend fun getStaffTimeOff(): SalonResult<List<StaffTimeOff>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val salon = authRepository.fetchSalonsNow()
-        val salonId = salon?.id ?: "salon-1"
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(localStaffTimeOff.toList())
-        }
-
-        try {
-            val res = SupabaseClient.restApi.getStaffTimeOff(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                salonIdFilter = "eq.$salonId"
+    suspend fun getStaffTimeOff(): SalonResult<List<StaffTimeOff>> = io {
+        // Past time off is irrelevant for scheduling; keep the list short.
+        val since = IstTime.toOffset("${IstTime.today()}T00:00:00")
+        SupabaseHttp.select(
+            "staff_time_off?salon_id=eq.${salonId()}&end_time=gte.${java.net.URLEncoder.encode(since, "UTF-8")}" +
+                "&select=*,staff(name)&order=start_time&limit=200"
+        ).objects().map { o ->
+            StaffTimeOff(
+                id = o.getString("id"),
+                salonId = o.str("salon_id"),
+                staffId = o.str("staff_id"),
+                staffName = nested(o, "staff", "name") ?: "Whole Salon",
+                startTime = IstTime.toLocal(o.str("start_time")).orEmpty(),
+                endTime = IstTime.toLocal(o.str("end_time")).orEmpty(),
+                reason = o.str("reason")
             )
-            if (res.isSuccessful && res.body() != null) {
-                val list = res.body()!!
-                if (list.isNotEmpty()) SalonResult.Success(list)
-                else SalonResult.Success(localStaffTimeOff.toList())
-            } else {
-                SalonResult.Success(localStaffTimeOff.toList())
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(localStaffTimeOff.toList())
         }
     }
 
@@ -1362,58 +356,12 @@ class SalonRepository(
         staffId: String?,
         startTime: String,
         endTime: String
-    ): SalonResult<List<Booking>> = withContext(Dispatchers.IO) {
-        val targetStaffId = if (staffId == "all" || staffId.isNullOrBlank()) null else staffId
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            val conflicts = localBookings.filter { b ->
-                val isTargetStaff = targetStaffId == null || b.staffId == targetStaffId
-                val isConfirmed = b.status == "confirmed" || b.status == "arrived"
-                val bStart = b.startTime
-                val bEnd = b.endTime ?: b.startTime
-                val overlaps = bStart < endTime && bEnd > startTime
-                isTargetStaff && isConfirmed && overlaps
-            }
-            return@withContext SalonResult.Success(conflicts)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.getTimeOffConflicts(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = TimeOffConflictParams(
-                    staffId = targetStaffId,
-                    start = startTime,
-                    end = endTime
-                )
-            )
-            if (res.isSuccessful && res.body() != null) {
-                SalonResult.Success(res.body()!!)
-            } else {
-                val conflicts = localBookings.filter { b ->
-                    val isTargetStaff = targetStaffId == null || b.staffId == targetStaffId
-                    val isConfirmed = b.status == "confirmed" || b.status == "arrived"
-                    val bStart = b.startTime
-                    val bEnd = b.endTime ?: b.startTime
-                    val overlaps = bStart < endTime && bEnd > startTime
-                    isTargetStaff && isConfirmed && overlaps
-                }
-                SalonResult.Success(conflicts)
-            }
-        } catch (_: Exception) {
-            val conflicts = localBookings.filter { b ->
-                val isTargetStaff = targetStaffId == null || b.staffId == targetStaffId
-                val isConfirmed = b.status == "confirmed" || b.status == "arrived"
-                val bStart = b.startTime
-                val bEnd = b.endTime ?: b.startTime
-                val overlaps = bStart < endTime && bEnd > startTime
-                isTargetStaff && isConfirmed && overlaps
-            }
-            SalonResult.Success(conflicts)
-        }
+    ): SalonResult<List<Booking>> = io {
+        val params = JSONObject()
+            .put("p_staff_id", staffId?.takeIf { it.isNotBlank() && it != "all" } ?: JSONObject.NULL)
+            .put("p_start", IstTime.toOffset(startTime))
+            .put("p_end", IstTime.toOffset(endTime))
+        JSONArray(SupabaseHttp.rpc("get_time_off_conflicts", params)).objects().map { parseBooking(it, idKey = "booking_id") }
     }
 
     suspend fun addStaffTimeOff(
@@ -1422,479 +370,211 @@ class SalonRepository(
         endTime: String,
         reason: String?,
         cancelConflicts: Boolean
-    ): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val salon = authRepository.fetchSalonsNow()
-        val salonId = salon?.id ?: "salon-1"
-        val targetStaffId = if (staffId == "all" || staffId.isNullOrBlank()) null else staffId
-        val staffName = if (targetStaffId == null) "Whole Salon"
-        else localStaff.find { it.id == targetStaffId }?.name ?: "Stylist"
-
-        if (cancelConflicts) {
-            localBookings.forEachIndexed { index, b ->
-                val isTargetStaff = targetStaffId == null || b.staffId == targetStaffId
-                val isConfirmed = b.status == "confirmed" || b.status == "arrived"
-                val bStart = b.startTime
-                val bEnd = b.endTime ?: b.startTime
-                if (isTargetStaff && isConfirmed && bStart < endTime && bEnd > startTime) {
-                    localBookings[index] = b.copy(status = "cancelled")
-                }
-            }
-        }
-
-        val item = StaffTimeOff(
-            id = "to-${UUID.randomUUID()}",
-            salonId = salonId,
-            staffId = targetStaffId,
-            staffName = staffName,
-            startTime = startTime,
-            endTime = endTime,
-            reason = reason?.ifBlank { null }
-        )
-        localStaffTimeOff.add(item)
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.addTimeOff(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                params = AddTimeOffParams(
-                    staffId = targetStaffId,
-                    start = startTime,
-                    end = endTime,
-                    reason = reason,
-                    cancelConflicts = cancelConflicts
-                )
-            )
-            if (res.isSuccessful) {
-                SalonResult.Success(Unit)
-            } else {
-                val err = res.errorBody()?.string() ?: ""
-                SalonResult.Error(err.ifBlank { "Could not record staff time off." })
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    ): SalonResult<Unit> = io {
+        val params = JSONObject()
+            .put("p_staff_id", staffId?.takeIf { it.isNotBlank() && it != "all" } ?: JSONObject.NULL)
+            .put("p_start", IstTime.toOffset(startTime))
+            .put("p_end", IstTime.toOffset(endTime))
+            .put("p_reason", reason?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+            .put("p_cancel_conflicts", cancelConflicts)
+        SupabaseHttp.rpc("add_time_off", params)
+        Unit
     }
 
-    suspend fun deleteStaffTimeOff(id: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localStaffTimeOff.removeAll { it.id == id }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.deleteStaffTimeOff(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$id"
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun deleteStaffTimeOff(id: String): SalonResult<Unit> = io {
+        SupabaseHttp.delete("staff_time_off", "id=eq.$id")
+        Unit
     }
 
-    // --- Part 4: Profile, Services & Categories, Combos, Staff, Hours, Settings, Payout ---
+    // ======================= Salon profile & settings =======================
 
-    suspend fun updateSalonProfile(salonId: String, request: UpdateSalonProfileRequest): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val prefs = authRepository.prefs
-        prefs.edit()
-            .putString("cached_salon_name", request.name)
-            .putString("cached_salon_address", request.address)
-            .putString("cached_salon_area", request.area)
-            .putString("cached_salon_city", request.city)
-            .putString("cached_salon_pincode", request.pincode)
-            .putString("cached_salon_phone", request.phone)
-            .putString("cached_salon_type", request.salonType)
-            .putBoolean("cached_salon_is_active", request.isActive)
-            .apply()
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.updateSalonProfile(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$salonId",
-                body = request
-            )
-            if (res.isSuccessful) SalonResult.Success(Unit)
-            else SalonResult.Success(Unit) // Local store already updated
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun updateSalonProfile(salonId: String, request: UpdateSalonProfileRequest): SalonResult<Unit> = io {
+        val body = JSONObject()
+            .put("name", request.name.trim())
+            .put("description", request.description?.trim()?.ifBlank { null } ?: JSONObject.NULL)
+            .put("salon_type", request.salonType.lowercase())
+            .put("address", request.address.trim())
+            .put("area", request.area.trim())
+            .put("city", request.city.trim())
+            .put("pincode", request.pincode.trim())
+            .put("phone", request.phone.trim())
+            .put("gst_number", request.gstNumber?.trim()?.uppercase()?.ifBlank { null } ?: JSONObject.NULL)
+            .put("photos", JSONArray(request.photos))
+            .put("cover_photo_index", request.coverPhotoIndex)
+            .put("is_active", request.isActive)
+        val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
+        if (rows.length() == 0) throw SupabaseException("Salon not found.")
+        authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
-    suspend fun updateSalonSettings(salonId: String, request: UpdateSalonSettingsRequest): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.updateSalonSettings(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$salonId",
-                body = request
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun updateSalonSettings(salonId: String, request: UpdateSalonSettingsRequest): SalonResult<Unit> = io {
+        val body = JSONObject()
+            .put("slot_interval_minutes", request.slotIntervalMinutes)
+            .put("booking_window_days", request.bookingWindowDays)
+            .put("min_notice_minutes", request.minNoticeMinutes)
+            .put("late_threshold_minutes", request.lateThresholdMinutes)
+            .put("late_credit_amount", request.lateCreditAmount)
+        val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
+        if (rows.length() == 0) throw SupabaseException("Salon not found.")
+        authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
-    suspend fun uploadSalonPhoto(fileName: String, bytes: ByteArray, mimeType: String): SalonResult<String> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        val publicUrl = "${SupabaseConfig.DEFAULT_BASE_URL}storage/v1/object/public/salon-photos/$fileName"
-
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(publicUrl)
-        }
-
-        try {
-            val reqBody = bytes.toRequestBody(mimeType.toMediaTypeOrNull())
-            val res = SupabaseClient.restApi.uploadSalonPhoto(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                contentType = mimeType,
-                filePath = fileName,
-                fileData = reqBody
-            )
-            if (res.isSuccessful) SalonResult.Success(publicUrl)
-            else SalonResult.Success(publicUrl)
-        } catch (_: Exception) {
-            SalonResult.Success(publicUrl)
-        }
+    /** Uploads into the owner's own folder (required by storage RLS) and returns the public URL. */
+    suspend fun uploadSalonPhoto(fileName: String, bytes: ByteArray, mimeType: String): SalonResult<String> = io {
+        val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
+        val safeName = fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80)
+        val path = "$uid/${System.currentTimeMillis()}_$safeName"
+        SupabaseHttp.upload("salon-photos", path, bytes, mimeType)
+        SupabaseHttp.publicUrl("salon-photos", path)
     }
 
-    suspend fun getServiceCategories(salonId: String): SalonResult<List<ServiceCategory>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(localCategories.toList())
-        }
+    // ======================= Catalog: categories, services, combos =======================
 
-        try {
-            val res = SupabaseClient.restApi.getServiceCategories(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                salonIdFilter = "eq.$salonId"
-            )
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                val list = res.body()!!
-                localCategories.clear()
-                localCategories.addAll(list)
-                SalonResult.Success(list)
-            } else {
-                SalonResult.Success(localCategories.toList())
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(localCategories.toList())
-        }
+    suspend fun getServiceCategories(salonId: String): SalonResult<List<ServiceCategory>> = io {
+        SupabaseHttp.select("service_categories?salon_id=eq.$salonId&select=id,salon_id,name,sort_order&order=sort_order,name")
+            .objects().map { ServiceCategory(it.getString("id"), it.str("salon_id"), it.optString("name"), it.optInt("sort_order")) }
     }
 
-    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int): SalonResult<ServiceCategory> = withContext(Dispatchers.IO) {
-        val newCat = ServiceCategory(
-            id = "cat-${UUID.randomUUID().toString().take(8)}",
-            salonId = salonId,
-            name = name.trim(),
-            sortOrder = sortOrder
-        )
-        localCategories.add(newCat)
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(newCat)
-        }
-
-        try {
-            val res = SupabaseClient.restApi.insertServiceCategory(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                category = CreateServiceCategoryRequest(salonId, name.trim(), sortOrder)
-            )
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                SalonResult.Success(res.body()!!.first())
-            } else {
-                SalonResult.Success(newCat)
-            }
-        } catch (_: Exception) {
-            SalonResult.Success(newCat)
-        }
+    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int): SalonResult<ServiceCategory> = io {
+        if (name.isBlank()) throw SupabaseException("Please enter a category name.")
+        val o = SupabaseHttp.insert(
+            "service_categories",
+            JSONObject().put("salon_id", salonId).put("name", name.trim()).put("sort_order", sortOrder)
+        ).getJSONObject(0)
+        ServiceCategory(o.getString("id"), o.str("salon_id"), o.optString("name"), o.optInt("sort_order"))
     }
 
-    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val idx = localCategories.indexOfFirst { it.id == id }
-        if (idx >= 0) {
-            localCategories[idx] = localCategories[idx].copy(name = name.trim(), sortOrder = sortOrder)
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.updateServiceCategory(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$id",
-                body = UpdateServiceCategoryRequest(name.trim(), sortOrder)
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int): SalonResult<Unit> = io {
+        if (name.isBlank()) throw SupabaseException("Please enter a category name.")
+        SupabaseHttp.update("service_categories", "id=eq.$id", JSONObject().put("name", name.trim()).put("sort_order", sortOrder))
+        Unit
     }
 
-    suspend fun deleteServiceCategory(id: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localCategories.removeAll { it.id == id }
-        // Update local services that belonged to this category
-        localServices.forEachIndexed { i, s ->
-            if (s.categoryId == id) {
-                localServices[i] = s.copy(categoryId = null)
-            }
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.deleteServiceCategory(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$id"
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    /** Services in the category become uncategorized (FK is ON DELETE SET NULL). */
+    suspend fun deleteServiceCategory(id: String): SalonResult<Unit> = io {
+        SupabaseHttp.delete("service_categories", "id=eq.$id")
+        Unit
     }
 
-    suspend fun getServicesListWithAssignments(salonId: String): SalonResult<List<SalonService>> = withContext(Dispatchers.IO) {
-        val list = localServices.map { srv ->
-            srv.copy(assignedStaffIds = localStaffServices[srv.id]?.toList() ?: emptyList())
-        }
-        SalonResult.Success(list)
+    suspend fun getServicesListWithAssignments(salonId: String): SalonResult<List<SalonService>> = io {
+        SupabaseHttp.select("services?salon_id=eq.$salonId&select=*,staff_services(staff_id),service_categories(name)&order=name")
+            .objects().map(::parseService)
     }
+
+    private fun isUuid(id: String) = Regex("^[0-9a-fA-F-]{36}$").matches(id)
 
     suspend fun saveSalonService(
         service: SalonService,
         assignedStaffIds: List<String>
-    ): SalonResult<SalonService> = withContext(Dispatchers.IO) {
-        val srvId = if (service.id.isBlank()) "srv-${UUID.randomUUID().toString().take(8)}" else service.id
-        val target = service.copy(id = srvId, assignedStaffIds = assignedStaffIds)
-
-        val existingIdx = localServices.indexOfFirst { it.id == srvId }
-        if (existingIdx >= 0) {
-            localServices[existingIdx] = target
+    ): SalonResult<SalonService> = io {
+        if (service.name.isBlank()) throw SupabaseException("Please enter a service name.")
+        val body = JSONObject()
+            .put("name", service.name.trim())
+            .put("category_id", service.categoryId?.takeIf { isUuid(it) } ?: JSONObject.NULL)
+            .put("price", service.price)
+            .put("duration_minutes", service.durationMins ?: 30)
+            .put("buffer_minutes", service.bufferMins ?: 0)
+            .put("is_active", service.isActive)
+        val saved = if (isUuid(service.id)) {
+            SupabaseHttp.update("services", "id=eq.${service.id}", body).objects().firstOrNull()
+                ?: throw SupabaseException("Service not found.")
         } else {
-            localServices.add(target)
+            SupabaseHttp.insert("services", body.put("salon_id", service.salonId?.takeIf { isUuid(it) } ?: salonIdBlocking()))
+                .getJSONObject(0)
         }
-        localStaffServices[srvId] = assignedStaffIds.toMutableList()
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(target)
-        }
-
-        try {
-            if (existingIdx >= 0) {
-                SupabaseClient.restApi.updateService(anonKey, "Bearer $token", "eq.$srvId", target)
-                SupabaseClient.restApi.deleteStaffServicesForService(anonKey, "Bearer $token", "eq.$srvId")
-            } else {
-                SupabaseClient.restApi.insertService(anonKey, "Bearer $token", target)
-            }
-            assignedStaffIds.forEach { stId ->
-                try {
-                    SupabaseClient.restApi.insertStaffService(anonKey, "Bearer $token", StaffService(stId, srvId))
-                } catch (_: Exception) {}
-            }
-            SalonResult.Success(target)
-        } catch (_: Exception) {
-            SalonResult.Success(target)
-        }
+        val serviceId = saved.getString("id")
+        SupabaseHttp.delete("staff_services", "service_id=eq.$serviceId")
+        val links = JSONArray()
+        assignedStaffIds.distinct().filter { isUuid(it) }.forEach { links.put(JSONObject().put("staff_id", it).put("service_id", serviceId)) }
+        if (links.length() > 0) SupabaseHttp.insert("staff_services", links)
+        parseService(saved).copy(assignedStaffIds = assignedStaffIds.distinct())
     }
 
-    suspend fun deleteSalonService(serviceId: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localServices.removeAll { it.id == serviceId }
-        localStaffServices.remove(serviceId)
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
+    /**
+     * Deletes a service. Services with booking history cannot be deleted (bookings keep a reference),
+     * so those are deactivated instead and disappear from the menu.
+     */
+    suspend fun deleteSalonService(serviceId: String): SalonResult<Unit> = io {
         try {
-            SupabaseClient.restApi.deleteService(anonKey, "Bearer $token", "eq.$serviceId")
-            SupabaseClient.restApi.deleteStaffServicesForService(anonKey, "Bearer $token", "eq.$serviceId")
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
+            SupabaseHttp.delete("services", "id=eq.$serviceId")
+        } catch (e: SupabaseException) {
+            if (e.pgCode != "23503") throw e
+            SupabaseHttp.update("services", "id=eq.$serviceId", JSONObject().put("is_active", false))
         }
+        Unit
     }
 
-    suspend fun getCombosList(salonId: String): SalonResult<List<Combo>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(localCombos.toList())
-        }
-
-        try {
-            val res = SupabaseClient.restApi.getCombos(anonKey, "Bearer $token", "eq.$salonId")
-            if (res.isSuccessful && !res.body().isNullOrEmpty()) {
-                val list = res.body()!!
-                localCombos.clear()
-                localCombos.addAll(list)
-                SalonResult.Success(list)
-            } else {
-                SalonResult.Success(localCombos.toList())
+    suspend fun getCombosList(salonId: String): SalonResult<List<Combo>> = io {
+        SupabaseHttp.select("combos?salon_id=eq.$salonId&select=*,combo_services(service_id,services(duration_minutes))&order=name")
+            .objects().map { o ->
+                val items = (o.optJSONArray("combo_services") ?: JSONArray()).objects()
+                Combo(
+                    id = o.getString("id"),
+                    salonId = o.str("salon_id"),
+                    name = o.optString("name"),
+                    price = o.optDouble("price", 0.0),
+                    isActive = o.optBoolean("is_active", true),
+                    serviceIds = items.map { it.getString("service_id") },
+                    totalDurationMins = items.sumOf { it.optJSONObject("services")?.optInt("duration_minutes") ?: 0 }
+                )
             }
-        } catch (_: Exception) {
-            SalonResult.Success(localCombos.toList())
-        }
     }
 
-    suspend fun saveCombo(combo: Combo, serviceIds: List<String>): SalonResult<Combo> = withContext(Dispatchers.IO) {
-        val totalMins = serviceIds.sumOf { sId ->
-            localServices.find { it.id == sId }?.durationMins ?: 30
-        }
-        val cmbId = if (combo.id.isBlank()) "cmb-${UUID.randomUUID().toString().take(8)}" else combo.id
-        val target = combo.copy(id = cmbId, serviceIds = serviceIds, totalDurationMins = totalMins)
-
-        val existingIdx = localCombos.indexOfFirst { it.id == cmbId }
-        if (existingIdx >= 0) {
-            localCombos[existingIdx] = target
+    suspend fun saveCombo(combo: Combo, serviceIds: List<String>): SalonResult<Combo> = io {
+        if (combo.name.isBlank()) throw SupabaseException("Please enter a package name.")
+        if (serviceIds.size < 2) throw SupabaseException("A package needs at least two services.")
+        val body = JSONObject().put("name", combo.name.trim()).put("price", combo.price).put("is_active", combo.isActive)
+        val saved = if (isUuid(combo.id)) {
+            SupabaseHttp.update("combos", "id=eq.${combo.id}", body).objects().firstOrNull()
+                ?: throw SupabaseException("Package not found.")
         } else {
-            localCombos.add(target)
+            SupabaseHttp.insert("combos", body.put("salon_id", combo.salonId?.takeIf { isUuid(it) } ?: salonIdBlocking())).getJSONObject(0)
         }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(target)
-        }
-
-        try {
-            if (existingIdx >= 0) {
-                SupabaseClient.restApi.updateCombo(anonKey, "Bearer $token", "eq.$cmbId", target)
-                SupabaseClient.restApi.deleteComboServicesForCombo(anonKey, "Bearer $token", "eq.$cmbId")
-            } else {
-                SupabaseClient.restApi.insertCombo(anonKey, "Bearer $token", target)
-            }
-            serviceIds.forEach { srvId ->
-                try {
-                    SupabaseClient.restApi.insertComboService(anonKey, "Bearer $token", ComboService(cmbId, srvId))
-                } catch (_: Exception) {}
-            }
-            SalonResult.Success(target)
-        } catch (_: Exception) {
-            SalonResult.Success(target)
-        }
+        val comboId = saved.getString("id")
+        SupabaseHttp.delete("combo_services", "combo_id=eq.$comboId")
+        val links = JSONArray()
+        serviceIds.distinct().forEach { links.put(JSONObject().put("combo_id", comboId).put("service_id", it)) }
+        SupabaseHttp.insert("combo_services", links)
+        combo.copy(id = comboId, salonId = saved.str("salon_id"), serviceIds = serviceIds.distinct())
     }
 
-    suspend fun deleteCombo(comboId: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localCombos.removeAll { it.id == comboId }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.deleteCombo(anonKey, "Bearer $token", "eq.$comboId")
-            SupabaseClient.restApi.deleteComboServicesForCombo(anonKey, "Bearer $token", "eq.$comboId")
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+    suspend fun deleteCombo(comboId: String): SalonResult<Unit> = io {
+        SupabaseHttp.delete("combo_services", "combo_id=eq.$comboId")
+        SupabaseHttp.delete("combos", "id=eq.$comboId")
+        Unit
     }
 
-    suspend fun getStaffList(): List<Staff> {
-        return localStaff.toList()
-    }
+    // ======================= Staff =======================
 
+    /** All staff (including inactive) of the owner's salon. */
+    suspend fun getStaffList(): List<Staff> =
+        io { SupabaseHttp.select("staff?salon_id=eq.${salonId()}&select=*&order=name").objects().map(::parseStaff) }
+            .orNull() ?: emptyList()
+
+    /** Adds a stylist; their working hours start as the salon's opening hours so they are bookable. */
     suspend fun addStaffMember(
         salonId: String,
         name: String,
         commissionPercent: Double,
         photoUrl: String?
-    ): SalonResult<Staff> = withContext(Dispatchers.IO) {
-        val stId = "st-${UUID.randomUUID().toString().take(8)}"
-        val staff = Staff(
-            id = stId,
-            salonId = salonId,
-            name = name.trim(),
-            role = "Stylist",
-            photoUrl = photoUrl,
-            commissionPercent = commissionPercent,
-            isActive = true
-        )
-        localStaff.add(staff)
-
-        // Initialize 7 days of hours for this new staff
-        val hoursList = mutableListOf<StaffHours>()
-        for (day in 0..6) {
-            hoursList.add(
-                StaffHours(
-                    id = "sth-$stId-$day",
-                    staffId = stId,
-                    dayOfWeek = day,
-                    isWorking = day != 0, // Sunday off by default for new staff
-                    startTime = "10:00",
-                    endTime = "19:00"
+    ): SalonResult<Staff> = io {
+        if (name.isBlank()) throw SupabaseException("Please enter the stylist's name.")
+        val body = JSONObject()
+            .put("salon_id", salonId)
+            .put("name", name.trim())
+            .put("commission_percent", commissionPercent)
+            .put("photo_url", photoUrl?.ifBlank { null } ?: JSONObject.NULL)
+        val staff = parseStaff(SupabaseHttp.insert("staff", body).getJSONObject(0))
+        val hours = JSONArray()
+        SupabaseHttp.select("salon_hours?salon_id=eq.$salonId&is_closed=eq.false&select=day_of_week,open_time,close_time")
+            .objects().forEach { h ->
+                hours.put(
+                    JSONObject().put("staff_id", staff.id).put("day_of_week", h.optInt("day_of_week"))
+                        .put("start_time", h.optString("open_time")).put("end_time", h.optString("close_time"))
                 )
-            )
-        }
-        localStaffHours[stId] = hoursList
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(staff)
-        }
-
-        try {
-            SupabaseClient.restApi.insertStaff(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                staff = CreateStaffRequest(
-                    salonId = salonId,
-                    name = name.trim(),
-                    role = "Stylist",
-                    photoUrl = photoUrl,
-                    commissionPercent = commissionPercent,
-                    isActive = true
-                )
-            )
-            SalonResult.Success(staff)
-        } catch (_: Exception) {
-            SalonResult.Success(staff)
-        }
+            }
+        if (hours.length() > 0) SupabaseHttp.insert("staff_hours", hours)
+        staff
     }
 
     suspend fun updateStaffMember(
@@ -1903,345 +583,181 @@ class SalonRepository(
         photoUrl: String? = null,
         commissionPercent: Double? = null,
         isActive: Boolean? = null
-    ): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val idx = localStaff.indexOfFirst { it.id == staffId }
-        if (idx >= 0) {
-            val curr = localStaff[idx]
-            localStaff[idx] = curr.copy(
-                name = name?.trim() ?: curr.name,
-                photoUrl = photoUrl ?: curr.photoUrl,
-                commissionPercent = commissionPercent ?: curr.commissionPercent,
-                isActive = isActive ?: curr.isActive
-            )
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.updateStaff(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$staffId",
-                body = UpdateStaffRequest(name, photoUrl, commissionPercent, isActive)
-            )
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
+    ): SalonResult<Unit> = io {
+        val body = JSONObject()
+        name?.let { if (it.isBlank()) throw SupabaseException("Please enter the stylist's name."); body.put("name", it.trim()) }
+        photoUrl?.let { body.put("photo_url", it.ifBlank { null } ?: JSONObject.NULL) }
+        commissionPercent?.let { body.put("commission_percent", it) }
+        isActive?.let { body.put("is_active", it) }
+        if (body.length() > 0) {
+            val rows = SupabaseHttp.update("staff", "id=eq.$staffId", body)
+            if (rows.length() == 0) throw SupabaseException("Stylist not found.")
         }
     }
 
-    suspend fun getStaffHours(staffId: String): SalonResult<List<StaffHours>> = withContext(Dispatchers.IO) {
-        val existing = localStaffHours[staffId]
-        if (existing != null && existing.isNotEmpty()) {
-            return@withContext SalonResult.Success(existing.toList())
-        }
-        val defaultList = (0..6).map { day ->
+    suspend fun getStaffHours(staffId: String): SalonResult<List<StaffHours>> = io {
+        val rows = SupabaseHttp.select("staff_hours?staff_id=eq.$staffId&select=*").objects().associateBy { it.optInt("day_of_week") }
+        (0..6).map { day ->
+            val r = rows[day]
             StaffHours(
-                id = "sth-$staffId-$day",
+                id = r?.str("id").orEmpty(),
                 staffId = staffId,
                 dayOfWeek = day,
-                isWorking = day != 0,
-                startTime = "10:00",
-                endTime = "19:00"
+                isWorking = r != null,
+                startTime = r?.let { IstTime.hhmm(it.str("start_time")) } ?: "10:00",
+                endTime = r?.let { IstTime.hhmm(it.str("end_time")) } ?: "19:00"
             )
         }
-        localStaffHours[staffId] = defaultList.toMutableList()
-        SalonResult.Success(defaultList)
     }
 
-    suspend fun saveStaffHours(staffId: String, hours: List<StaffHours>): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localStaffHours[staffId] = hours.toMutableList()
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
+    suspend fun saveStaffHours(staffId: String, hours: List<StaffHours>): SalonResult<Unit> = io {
+        val working = hours.filter { it.isWorking }
+        working.forEach { if (it.endTime <= it.startTime) throw SupabaseException("End time must be after start time.") }
+        SupabaseHttp.delete("staff_hours", "staff_id=eq.$staffId")
+        val rows = JSONArray()
+        working.forEach {
+            rows.put(JSONObject().put("staff_id", staffId).put("day_of_week", it.dayOfWeek).put("start_time", it.startTime).put("end_time", it.endTime))
         }
-
-        try {
-            SupabaseClient.restApi.deleteStaffHours(anonKey, "Bearer $token", "eq.$staffId")
-            hours.filter { it.isWorking }.forEach { h ->
-                try {
-                    SupabaseClient.restApi.insertStaffHours(anonKey, "Bearer $token", h)
-                } catch (_: Exception) {}
-            }
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+        if (rows.length() > 0) SupabaseHttp.insert("staff_hours", rows)
+        Unit
     }
 
-    suspend fun saveStaffServicesForStaff(staffId: String, selectedServiceIds: List<String>): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localServices.forEach { srv ->
-            val list = localStaffServices.getOrPut(srv.id) { mutableListOf() }
-            if (selectedServiceIds.contains(srv.id)) {
-                if (!list.contains(staffId)) list.add(staffId)
-            } else {
-                list.remove(staffId)
-            }
-        }
-        SalonResult.Success(Unit)
+    suspend fun saveStaffServicesForStaff(staffId: String, selectedServiceIds: List<String>): SalonResult<Unit> = io {
+        SupabaseHttp.delete("staff_services", "staff_id=eq.$staffId")
+        val rows = JSONArray()
+        selectedServiceIds.distinct().forEach { rows.put(JSONObject().put("staff_id", staffId).put("service_id", it)) }
+        if (rows.length() > 0) SupabaseHttp.insert("staff_services", rows)
+        Unit
     }
 
-    suspend fun getSalonHours(salonId: String): SalonResult<List<SalonHours>> = withContext(Dispatchers.IO) {
-        if (localSalonHours.isNotEmpty()) {
-            return@withContext SalonResult.Success(localSalonHours.toList())
-        }
-        val defaultHours = (0..6).map { day ->
+    // ======================= Hours & payout =======================
+
+    suspend fun getSalonHours(salonId: String): SalonResult<List<SalonHours>> = io {
+        val rows = SupabaseHttp.select("salon_hours?salon_id=eq.$salonId&select=*").objects().associateBy { it.optInt("day_of_week") }
+        (0..6).map { day ->
+            val r = rows[day]
             SalonHours(
-                id = "sh-$day",
+                id = r?.str("id").orEmpty(),
                 salonId = salonId,
                 dayOfWeek = day,
-                isClosed = false,
-                openTime = "10:00",
-                closeTime = "20:00"
+                isClosed = r?.optBoolean("is_closed") ?: true,
+                openTime = r?.str("open_time")?.let(IstTime::hhmm) ?: "10:00",
+                closeTime = r?.str("close_time")?.let(IstTime::hhmm) ?: "20:00"
             )
         }
-        localSalonHours.addAll(defaultHours)
-        SalonResult.Success(defaultHours)
     }
 
-    suspend fun saveSalonHours(salonId: String, hours: List<SalonHours>): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        localSalonHours.clear()
-        localSalonHours.addAll(hours)
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
+    suspend fun saveSalonHours(salonId: String, hours: List<SalonHours>): SalonResult<Unit> = io {
+        val rows = JSONArray()
+        hours.forEach { h ->
+            if (!h.isClosed && h.closeTime <= h.openTime) throw SupabaseException("Closing time must be after opening time.")
+            rows.put(
+                JSONObject().put("salon_id", salonId).put("day_of_week", h.dayOfWeek).put("is_closed", h.isClosed)
+                    .put("open_time", h.openTime).put("close_time", h.closeTime)
+            )
         }
-
-        try {
-            SupabaseClient.restApi.deleteSalonHours(anonKey, "Bearer $token", "eq.$salonId")
-            hours.forEach { h ->
-                try {
-                    SupabaseClient.restApi.insertSalonHours(anonKey, "Bearer $token", h)
-                } catch (_: Exception) {}
-            }
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
-        }
+        SupabaseHttp.insert("salon_hours", rows, upsertOn = "salon_id,day_of_week")
+        Unit
     }
 
-    suspend fun getSalonPayoutDetails(salonId: String): SalonResult<SalonPayoutDetails?> = withContext(Dispatchers.IO) {
-        val existing = localPayoutDetails[salonId] ?: localPayoutDetails.values.firstOrNull()
-        SalonResult.Success(existing)
-    }
-
-    suspend fun saveSalonPayoutDetails(details: SalonPayoutDetails): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val sid = details.salonId ?: "salon-1"
-        localPayoutDetails[sid] = details
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-        if (anonKey.isBlank() || token == null || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext SalonResult.Success(Unit)
-        }
-
-        try {
-            SupabaseClient.restApi.upsertSalonPayoutDetails(anonKey, "Bearer $token", details)
-            SalonResult.Success(Unit)
-        } catch (_: Exception) {
-            SalonResult.Success(Unit)
+    suspend fun getSalonPayoutDetails(salonId: String): SalonResult<SalonPayoutDetails?> = io {
+        SupabaseHttp.select("salon_payout_details?salon_id=eq.$salonId&select=*").objects().firstOrNull()?.let { o ->
+            SalonPayoutDetails(
+                salonId = o.str("salon_id"),
+                accountHolderName = o.str("account_holder_name").orEmpty(),
+                upiId = o.str("upi_id").orEmpty(),
+                bankAccountNumber = o.str("bank_account_number").orEmpty(),
+                bankIfsc = o.str("bank_ifsc").orEmpty()
+            )
         }
     }
 
-    // --- Part 5: Earnings Summary RPC, Reviews, Notifications, Language ---
+    suspend fun saveSalonPayoutDetails(details: SalonPayoutDetails): SalonResult<Unit> = io {
+        val body = JSONObject()
+            .put("salon_id", details.salonId?.takeIf { isUuid(it) } ?: salonIdBlocking())
+            .put("account_holder_name", details.accountHolderName.trim().ifBlank { null } ?: JSONObject.NULL)
+            .put("upi_id", details.upiId.trim().ifBlank { null } ?: JSONObject.NULL)
+            .put("bank_account_number", details.bankAccountNumber.trim().ifBlank { null } ?: JSONObject.NULL)
+            .put("bank_ifsc", details.bankIfsc.trim().uppercase().ifBlank { null } ?: JSONObject.NULL)
+        SupabaseHttp.insert("salon_payout_details", body, upsertOn = "salon_id")
+        Unit
+    }
 
-    suspend fun getEarningsSummary(fromDate: String, toDate: String): SalonResult<List<StaffEarningsSummary>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
+    // ======================= Earnings, reviews, notifications, profile =======================
 
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                val res = SupabaseClient.restApi.getEarningsSummary(
-                    anonKey,
-                    "Bearer $token",
-                    EarningsSummaryParams(fromDate = fromDate, toDate = toDate)
+    suspend fun getEarningsSummary(fromDate: String, toDate: String): SalonResult<List<StaffEarningsSummary>> = io {
+        JSONArray(SupabaseHttp.rpc("get_earnings_summary", JSONObject().put("p_from", fromDate).put("p_to", toDate)))
+            .objects().map { o ->
+                StaffEarningsSummary(
+                    staffName = o.optString("staff_name"),
+                    completedCount = o.optInt("completed_count"),
+                    revenue = o.optDouble("revenue", 0.0),
+                    commissionPercent = o.optDouble("commission_percent", 0.0),
+                    commissionAmount = o.optDouble("commission_amount", 0.0),
+                    noShowCount = o.optInt("no_show_count"),
+                    cancelledCount = o.optInt("cancelled_count")
                 )
-                if (res.isSuccessful && res.body() != null) {
-                    val list = res.body()!!
-                    if (list.isNotEmpty()) {
-                        return@withContext SalonResult.Success(list)
-                    }
-                }
-            } catch (_: Exception) {
-                // fallback to local calculation
             }
-        }
+    }
 
-        // Local calculation based on localStaff and localBookings
-        val summaries = localStaff.map { st ->
-            val staffBookings = localBookings.filter { it.staffId == st.id || it.staffName == st.name }
-            // Filter by date if within range
-            val inRangeBookings = staffBookings.filter { b ->
-                val bDate = b.startTime.take(10)
-                bDate >= fromDate && bDate <= toDate
-            }.ifEmpty {
-                staffBookings
+    suspend fun getSalonReviews(salonId: String): SalonResult<List<SalonReview>> = io {
+        SupabaseHttp.select("reviews?salon_id=eq.$salonId&select=*,staff(name)&order=created_at.desc&limit=100")
+            .objects().map { o ->
+                SalonReview(
+                    id = o.getString("id"),
+                    salonId = o.optString("salon_id"),
+                    bookingId = o.str("booking_id"),
+                    customerId = o.str("customer_id"),
+                    customerName = o.str("customer_name") ?: "Customer",
+                    rating = o.optDouble("rating", 0.0),
+                    comment = o.str("comment"),
+                    staffId = o.str("staff_id"),
+                    staffName = nested(o, "staff", "name"),
+                    ownerReply = o.str("owner_reply"),
+                    createdAt = IstTime.toLocal(o.str("created_at"))
+                )
             }
-
-            val completed = inRangeBookings.filter { it.status.equals("completed", ignoreCase = true) }
-            val completedCount = completed.size
-            val revenue = completed.sumOf { it.price ?: 0.0 }
-            val commPercent = st.commissionPercent
-            val commAmount = revenue * (commPercent / 100.0)
-            val noShows = inRangeBookings.count { it.status.equals("no_show", ignoreCase = true) }
-            val cancelled = inRangeBookings.count { it.status.equals("cancelled", ignoreCase = true) }
-
-            StaffEarningsSummary(
-                staffName = st.name,
-                completedCount = completedCount,
-                revenue = revenue,
-                commissionPercent = commPercent,
-                commissionAmount = commAmount,
-                noShowCount = noShows,
-                cancelledCount = cancelled
-            )
-        }
-
-        SalonResult.Success(summaries)
     }
 
-    suspend fun getSalonReviews(salonId: String): SalonResult<List<SalonReview>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                val res = SupabaseClient.restApi.getSalonReviews(anonKey, "Bearer $token", "eq.$salonId")
-                if (res.isSuccessful && res.body() != null) {
-                    val remote = res.body()!!
-                    if (remote.isNotEmpty()) {
-                        localReviews.clear()
-                        localReviews.addAll(remote)
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-        SalonResult.Success(localReviews.toList())
+    suspend fun replyToReview(reviewId: String, replyText: String): SalonResult<Unit> = io {
+        if (replyText.isBlank()) throw SupabaseException("Please write a reply.")
+        val rows = SupabaseHttp.update("reviews", "id=eq.$reviewId", JSONObject().put("owner_reply", replyText.trim()))
+        if (rows.length() == 0) throw SupabaseException("Review not found.")
     }
 
-    suspend fun replyToReview(reviewId: String, replyText: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val idx = localReviews.indexOfFirst { it.id == reviewId }
-        if (idx != -1) {
-            localReviews[idx] = localReviews[idx].copy(ownerReply = replyText)
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                SupabaseClient.restApi.replyToReview(anonKey, "Bearer $token", "eq.$reviewId", UpdateReviewReplyRequest(replyText))
-            } catch (_: Exception) {}
-        }
-        SalonResult.Success(Unit)
+    suspend fun getNotifications(userId: String): SalonResult<List<SalonNotification>> = io {
+        SupabaseHttp.select("notifications?user_id=eq.$userId&select=*&order=created_at.desc&limit=100")
+            .objects().map { o ->
+                SalonNotification(
+                    id = o.getString("id"),
+                    userId = o.optString("user_id"),
+                    type = o.optString("type"),
+                    title = o.optString("title"),
+                    body = o.str("body").orEmpty(),
+                    bookingId = o.str("booking_id"),
+                    isRead = o.optBoolean("is_read"),
+                    createdAt = IstTime.toLocal(o.str("created_at"))
+                )
+            }
     }
 
-    suspend fun getNotifications(userId: String): SalonResult<List<SalonNotification>> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                val res = SupabaseClient.restApi.getNotifications(anonKey, "Bearer $token", "eq.$userId")
-                if (res.isSuccessful && res.body() != null) {
-                    val remote = res.body()!!
-                    if (remote.isNotEmpty()) {
-                        localNotifications.clear()
-                        localNotifications.addAll(remote)
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-        SalonResult.Success(localNotifications.toList())
+    suspend fun markNotificationRead(notificationId: String): SalonResult<Unit> = io {
+        SupabaseHttp.update("notifications", "id=eq.$notificationId", JSONObject().put("is_read", true))
+        Unit
     }
 
-    suspend fun markNotificationRead(notificationId: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        val idx = localNotifications.indexOfFirst { it.id == notificationId }
-        if (idx != -1) {
-            localNotifications[idx] = localNotifications[idx].copy(isRead = true)
-        }
-
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                SupabaseClient.restApi.markNotificationRead(anonKey, "Bearer $token", "eq.$notificationId", UpdateNotificationReadRequest(true))
-            } catch (_: Exception) {}
-        }
-        SalonResult.Success(Unit)
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun markAllNotificationsRead(salonId: String): SalonResult<Unit> = io {
+        val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
+        SupabaseHttp.update("notifications", "user_id=eq.$uid&is_read=eq.false", JSONObject().put("is_read", true))
+        Unit
     }
 
-    suspend fun markAllNotificationsRead(salonId: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
-        for (i in localNotifications.indices) {
-            localNotifications[i] = localNotifications[i].copy(isRead = true)
-        }
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                SupabaseClient.restApi.markAllNotificationsRead(anonKey, "Bearer $token", "eq.false", UpdateNotificationReadRequest(true))
-            } catch (_: Exception) {}
-        }
-        SalonResult.Success(Unit)
-    }
-
-
-    suspend fun updateProfileLanguage(userId: String, language: String): SalonResult<Unit> = withContext(Dispatchers.IO) {
+    suspend fun updateProfileLanguage(userId: String, language: String): SalonResult<Unit> {
         authRepository.saveLanguage(language)
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = authRepository.getAccessToken()
-
-        if (anonKey.isNotBlank() && token != null && !token.startsWith("demo-") && !token.startsWith("local-")) {
-            try {
-                SupabaseClient.restApi.updateProfileLanguage(anonKey, "Bearer $token", "eq.$userId", UpdateProfileLanguageRequest(language))
-            } catch (_: Exception) {}
+        return io {
+            SupabaseHttp.update("profiles", "id=eq.$userId", JSONObject().put("language", if (language == "hi") "hi" else "en"))
+            Unit
         }
-        SalonResult.Success(Unit)
     }
-}
-
-
-private val AuthRepository.prefs get() = context.getSharedPreferences("salon_auth_prefs", Context.MODE_PRIVATE)
-private val AuthRepository.context: Context get() {
-    val field = AuthRepository::class.java.getDeclaredField("context")
-    field.isAccessible = true
-    return field.get(this) as Context
-}
-
-private fun AuthRepository.fetchSalonsNow(): Salon? {
-    val cachedSalonName = prefs.getString("cached_salon_name", null) ?: return null
-    val cachedId = prefs.getString("cached_salon_id", "demo-salon-1") ?: "demo-salon-1"
-    val cachedStatus = prefs.getString("cached_salon_status", "pending") ?: "pending"
-    val cachedReason = prefs.getString("cached_salon_reason", null)
-    val cachedType = prefs.getString("cached_salon_type", "unisex") ?: "unisex"
-    val cachedAddress = prefs.getString("cached_salon_address", "Main Market") ?: ""
-    val cachedArea = prefs.getString("cached_salon_area", "Central") ?: ""
-    val cachedCity = prefs.getString("cached_salon_city", "Mumbai") ?: ""
-    val cachedPincode = prefs.getString("cached_salon_pincode", "400001") ?: ""
-    val cachedPhone = prefs.getString("cached_salon_phone", "9876543210") ?: ""
-    val cachedActive = prefs.getBoolean("cached_salon_is_active", true)
-    return Salon(
-        id = cachedId,
-        ownerId = getUserId(),
-        name = cachedSalonName,
-        salonType = cachedType,
-        address = cachedAddress,
-        area = cachedArea,
-        city = cachedCity,
-        pincode = cachedPincode,
-        phone = cachedPhone,
-        verificationStatus = cachedStatus,
-        rejectionReason = cachedReason,
-        isActive = cachedActive
-    )
 }
