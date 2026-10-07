@@ -444,7 +444,8 @@ fun MainAppShell(
                     },
                     onLanguageChange = onLanguageChange,
                     onToggleSalonActive = onToggleSalonActive,
-                    onLogout = onSignOut
+                    onLogout = onSignOut,
+                    onDeleteAccount = viewModel?.let { vm -> { onResult: (String?) -> Unit -> vm.deleteAccount(onResult) } }
                 )
             }
         }

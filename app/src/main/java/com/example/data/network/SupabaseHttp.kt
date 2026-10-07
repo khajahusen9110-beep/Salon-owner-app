@@ -196,6 +196,20 @@ object SupabaseHttp {
         send(request)
     }
 
+    /** Object names (full paths) directly under [folder] in [bucket]. */
+    fun listObjects(bucket: String, folder: String): List<String> {
+        val body = JSONObject().put("prefix", "$folder/").put("limit", 1000).toString()
+        val rows = JSONArray(execute("POST", "$baseUrl/storage/v1/object/list/$bucket", body))
+        return (0 until rows.length()).mapNotNull { i ->
+            rows.getJSONObject(i).optString("name").takeIf { it.isNotBlank() }?.let { "$folder/$it" }
+        }
+    }
+
+    fun removeObjects(bucket: String, paths: List<String>) {
+        if (paths.isEmpty()) return
+        execute("DELETE", "$baseUrl/storage/v1/object/$bucket", JSONObject().put("prefixes", JSONArray(paths)).toString())
+    }
+
     fun publicUrl(bucket: String, path: String) = "$baseUrl/storage/v1/object/public/$bucket/$path"
 
     private fun execute(
@@ -282,6 +296,9 @@ object IstTime {
     private fun fmt(pattern: String) = SimpleDateFormat(pattern, Locale.US).apply { timeZone = ist }
 
     fun today(): String = fmt("yyyy-MM-dd").format(Date())
+
+    /** Current instant as "2026-10-07T10:00:00+05:30". */
+    fun now(): String = fmt("yyyy-MM-dd'T'HH:mm:ssXXX").format(Date())
 
     /** "2026-10-07T04:30:00.12+00:00" -> "2026-10-07T10:00:00" (IST wall clock, the format the UI renders). */
     fun toLocal(iso: String?): String? {

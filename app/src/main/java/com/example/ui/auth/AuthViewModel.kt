@@ -417,6 +417,23 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(destinationRoute = "login", errorMessage = null) }
     }
 
+    /** Deletes the account; [onResult] gets null on success or an error message. */
+    fun deleteAccount(onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            when (val res = salonRepo.deleteMyAccount()) {
+                is SalonResult.Success -> {
+                    realtimeSyncJob?.cancel()
+                    _uiState.update {
+                        it.copy(user = null, profile = null, salon = null, destinationRoute = "login", currentStep = 1,
+                            errorMessage = null, selectedTab = "today", infoMessage = "Your account has been deleted.")
+                    }
+                    onResult(null)
+                }
+                is SalonResult.Error -> onResult(res.message)
+            }
+        }
+    }
+
     fun signOut() {
         realtimeSyncJob?.cancel()
         authRepo.clearSession()

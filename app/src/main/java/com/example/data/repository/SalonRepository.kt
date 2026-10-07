@@ -753,6 +753,30 @@ class SalonRepository(
         Unit
     }
 
+    /**
+     * Permanently deletes the owner's account (Play Store requirement): refuses while customers have
+     * upcoming bookings, then removes the owner's uploaded files and finally the account itself.
+     */
+    suspend fun deleteMyAccount(): SalonResult<Unit> = io {
+        val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
+        val salon = authRepository.fetchSalonsNow() ?: authRepository.fetchSalons().firstOrNull()
+        if (salon != null) {
+            val upcoming = SupabaseHttp.select(
+                "bookings?salon_id=eq.${salon.id}&status=in.(confirmed,arrived,in_service)" +
+                    "&end_time=gt.${java.net.URLEncoder.encode(IstTime.now(), "UTF-8")}" +
+                    "&select=id&limit=1"
+            )
+            if (upcoming.length() > 0) {
+                throw SupabaseException("Your salon has upcoming bookings. Cancel or complete them before deleting your account.")
+            }
+        }
+        listOf("salon-documents", "salon-photos", "service-images").forEach { bucket ->
+            SupabaseHttp.removeObjects(bucket, SupabaseHttp.listObjects(bucket, uid))
+        }
+        SupabaseHttp.rpc("delete_my_account")
+        authRepository.clearSession()
+    }
+
     suspend fun updateProfileLanguage(userId: String, language: String): SalonResult<Unit> {
         authRepository.saveLanguage(language)
         return io {
