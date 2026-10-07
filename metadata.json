@@ -1,0 +1,6 @@
+{
+  "name": "Salon Owner",
+  "description": "Mobile management app for salon owners to register, verify, and run their salon with schedule, bookings, staff, and earnings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
