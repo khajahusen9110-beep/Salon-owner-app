@@ -574,7 +574,8 @@ fun AddEditServiceDialog(
     val staffList = state.staffList
 
     // Fixed duration options: strictly 30, 60, 90, 120, 150, 180, 210, 240 mins
-    val validDurations = listOf(30, 60, 90, 120, 150, 180, 210, 240)
+    // Any 5-minute step is allowed by the database (5-480); these are the common choices.
+    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300)
     val bufferOptions = listOf(0, 5, 10, 15, 20, 30)
 
     var durationExpanded by remember { mutableStateOf(false) }
@@ -671,7 +672,7 @@ fun AddEditServiceDialog(
                     ) {
                         validDurations.forEach { d ->
                             DropdownMenuItem(
-                                text = { Text("$d minutes") },
+                                text = { Text(if (d < 60) "$d min" else if (d % 60 == 0) "${d / 60} hr" else "${d / 60} hr ${d % 60} min") },
                                 onClick = {
                                     viewModel.updateServiceFormDuration(d)
                                     durationExpanded = false
