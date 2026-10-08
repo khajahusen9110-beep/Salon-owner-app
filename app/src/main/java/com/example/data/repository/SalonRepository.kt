@@ -17,6 +17,7 @@ import com.example.data.model.Staff
 import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
+import com.example.data.model.SalonSetupStatus
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.network.IstTime
@@ -243,7 +244,8 @@ class SalonRepository(
         commissionPercent = o.optDouble("commission_percent", 0.0),
         ratingAvg = o.optDouble("rating_avg", 0.0),
         ratingCount = o.optInt("rating_count", 0),
-        isActive = o.optBoolean("is_active", true)
+        isActive = o.optBoolean("is_active", true),
+        doesAllServices = o.optBoolean("does_all_services", false)
     )
 
     private fun parseService(o: JSONObject): SalonService {
@@ -504,11 +506,14 @@ class SalonRepository(
                 .getJSONObject(0)
         }
         val serviceId = saved.getString("id")
+        // All-rounders always do every service, whatever was ticked.
+        val allRounders = SupabaseHttp.select("staff?salon_id=eq.${saved.getString("salon_id")}&does_all_services=eq.true&select=id")
+            .objects().map { it.getString("id") }
         SupabaseHttp.delete("staff_services", "service_id=eq.$serviceId")
         val links = JSONArray()
-        assignedStaffIds.distinct().filter { isUuid(it) }.forEach { links.put(JSONObject().put("staff_id", it).put("service_id", serviceId)) }
+        (assignedStaffIds + allRounders).distinct().filter { isUuid(it) }.forEach { links.put(JSONObject().put("staff_id", it).put("service_id", serviceId)) }
         if (links.length() > 0) SupabaseHttp.insert("staff_services", links)
-        parseService(saved).copy(assignedStaffIds = assignedStaffIds.distinct())
+        parseService(saved).copy(assignedStaffIds = (assignedStaffIds + allRounders).distinct())
     }
 
     /**
@@ -577,7 +582,9 @@ class SalonRepository(
         salonId: String,
         name: String,
         commissionPercent: Double,
-        photoUrl: String?
+        photoUrl: String?,
+        doesAllServices: Boolean = false,
+        serviceIds: List<String> = emptyList()
     ): SalonResult<Staff> = io {
         if (name.isBlank()) throw SupabaseException("Please enter the stylist's name.")
         val body = JSONObject()
@@ -585,7 +592,14 @@ class SalonRepository(
             .put("name", name.trim())
             .put("commission_percent", commissionPercent)
             .put("photo_url", photoUrl?.ifBlank { null } ?: JSONObject.NULL)
+            .put("does_all_services", doesAllServices)
         val staff = parseStaff(SupabaseHttp.insert("staff", body).getJSONObject(0))
+        // An all-rounder is linked to every service by the database; otherwise link the ticked services.
+        if (!doesAllServices && serviceIds.isNotEmpty()) {
+            val links = JSONArray()
+            serviceIds.distinct().filter { isUuid(it) }.forEach { links.put(JSONObject().put("staff_id", staff.id).put("service_id", it)) }
+            if (links.length() > 0) SupabaseHttp.insert("staff_services", links)
+        }
         val hours = JSONArray()
         SupabaseHttp.select("salon_hours?salon_id=eq.$salonId&is_closed=eq.false&select=day_of_week,open_time,close_time")
             .objects().forEach { h ->
@@ -643,12 +657,49 @@ class SalonRepository(
         Unit
     }
 
-    suspend fun saveStaffServicesForStaff(staffId: String, selectedServiceIds: List<String>): SalonResult<Unit> = io {
+    /**
+     * Saves what a stylist can do. An all-rounder gets every service of the salon (and, through the
+     * database, every service added later); otherwise exactly the ticked services.
+     */
+    suspend fun saveStaffServicesForStaff(staffId: String, selectedServiceIds: List<String>, doesAllServices: Boolean): SalonResult<Unit> = io {
+        SupabaseHttp.update("staff", "id=eq.$staffId", JSONObject().put("does_all_services", doesAllServices))
+        val ids = if (doesAllServices) {
+            SupabaseHttp.select("services?salon_id=eq.${salonIdBlocking()}&select=id").objects().map { it.getString("id") }
+        } else selectedServiceIds
         SupabaseHttp.delete("staff_services", "staff_id=eq.$staffId")
         val rows = JSONArray()
-        selectedServiceIds.distinct().forEach { rows.put(JSONObject().put("staff_id", staffId).put("service_id", it)) }
+        ids.distinct().forEach { rows.put(JSONObject().put("staff_id", staffId).put("service_id", it)) }
         if (rows.length() > 0) SupabaseHttp.insert("staff_services", rows)
         Unit
+    }
+
+    /** Upcoming bookings that would lose their stylist's skill if these services are removed from them. */
+    suspend fun countFutureBookingsFor(staffId: String, serviceIds: List<String>): SalonResult<Int> = io {
+        if (serviceIds.isEmpty()) return@io 0
+        SupabaseHttp.rpc(
+            "count_future_bookings_for",
+            JSONObject().put("p_staff_id", staffId).put("p_service_ids", JSONArray(serviceIds))
+        ).trim().toIntOrNull() ?: 0
+    }
+
+    /** Setup checklist for the Go Live screen. */
+    suspend fun getSetupStatus(): SalonResult<SalonSetupStatus> = io {
+        val o = JSONObject(SupabaseHttp.rpc("get_salon_setup_status", JSONObject()))
+        fun list(key: String): List<String> = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+        SalonSetupStatus(
+            isVerified = o.optBoolean("is_verified"),
+            isActive = o.optBoolean("is_active"),
+            isLive = o.optBoolean("is_live"),
+            ready = o.optBoolean("ready"),
+            missing = list("missing"),
+            hoursSet = o.optBoolean("hours_set"),
+            serviceCount = o.optInt("service_count"),
+            staffCount = o.optInt("staff_count"),
+            locationSet = o.optBoolean("location_set"),
+            servicesWithoutStaff = list("services_without_staff"),
+            staffWithoutServices = list("staff_without_services"),
+            staffWithoutHours = list("staff_without_hours")
+        )
     }
 
     // ======================= Hours & payout =======================

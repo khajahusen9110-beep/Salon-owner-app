@@ -68,6 +68,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.model.SalonService
 import com.example.data.model.Staff
 import com.example.ui.auth.AuthUiState
 import com.example.ui.auth.AuthViewModel
@@ -256,7 +257,7 @@ fun SalonStaffSection(
             onDismissRequest = { viewModel.closeAddStaffDialog() },
             title = { Text(SalonStrings.get(lang, "add_staff_title"), fontWeight = FontWeight.Bold) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(
                         value = state.staffFormName,
                         onValueChange = { viewModel.updateStaffFormName(it) },
@@ -285,6 +286,14 @@ fun SalonStaffSection(
                         modifier = Modifier.fillMaxWidth().testTag("input_staff_photo"),
                         shape = RoundedCornerShape(10.dp),
                         singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    StaffServicesPicker(
+                        services = state.servicesList,
+                        allServices = state.staffFormAllServices,
+                        selectedIds = state.staffFormServiceIds,
+                        onAllServicesChange = { viewModel.updateStaffFormAllServices(it) },
+                        onToggle = { viewModel.toggleStaffFormService(it) }
                     )
                 }
             },
@@ -507,31 +516,13 @@ fun StaffDetailScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    if (state.servicesList.isEmpty()) {
-                        Text(text = "No services exist yet.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        state.servicesList.forEach { srv ->
-                            val isChecked = state.staffSelectedServiceIds.contains(srv.id)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { viewModel.toggleStaffServiceAssignmentForStaff(srv.id) }
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isChecked,
-                                    onCheckedChange = { viewModel.toggleStaffServiceAssignmentForStaff(srv.id) },
-                                    colors = CheckboxDefaults.colors(checkedColor = TerracottaPrimary)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(text = srv.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                    Text(text = "₹${srv.price.toInt()} · ${srv.durationMins} mins", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
+                    StaffServicesPicker(
+                        services = state.servicesList,
+                        allServices = state.staffDetailAllServices,
+                        selectedIds = state.staffSelectedServiceIds,
+                        onAllServicesChange = { viewModel.setStaffDetailAllServices(it) },
+                        onToggle = { viewModel.toggleStaffServiceAssignmentForStaff(it) }
+                    )
                 }
             }
 
@@ -553,6 +544,98 @@ fun StaffDetailScreen(
         }
 
         Spacer(modifier = Modifier.height(30.dp))
+    }
+
+    state.staffServiceRemovalWarning?.let { count ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissStaffServiceRemovalWarning() },
+            title = { Text("Upcoming bookings", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "${staff.name} has $count upcoming booking(s) for the service(s) you are removing. " +
+                        "Those bookings stay as they are; only new bookings will stop. Continue?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.saveStaffAssignedServices(confirmed = true) },
+                    colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
+                    modifier = Modifier.testTag("btn_confirm_remove_services")
+                ) { Text("Yes, save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissStaffServiceRemovalWarning() }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+/**
+ * "Does all services" switch plus a tick list. With the switch on, the stylist is linked to every
+ * service, including ones added later.
+ */
+@Composable
+fun StaffServicesPicker(
+    services: List<SalonService>,
+    allServices: Boolean,
+    selectedIds: Set<String>,
+    onAllServicesChange: (Boolean) -> Unit,
+    onToggle: (String) -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { onAllServicesChange(!allServices) }.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Does all services (all-rounder)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Also gets every new service you add later.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = allServices,
+                onCheckedChange = onAllServicesChange,
+                modifier = Modifier.testTag("switch_staff_all_services")
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        if (services.isEmpty()) {
+            Text(
+                text = "No services yet. Add services first, then tick what this stylist does.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            services.forEach { srv ->
+                val checked = allServices || selectedIds.contains(srv.id)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !allServices) { onToggle(srv.id) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = checked,
+                        onCheckedChange = { onToggle(srv.id) },
+                        enabled = !allServices,
+                        colors = CheckboxDefaults.colors(checkedColor = TerracottaPrimary)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(text = srv.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            text = "₹${srv.price.toInt()} · ${srv.durationMins} mins",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

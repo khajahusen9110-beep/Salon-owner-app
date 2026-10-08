@@ -315,6 +315,11 @@ fun MainAppShell(
                         onOpenReviews = {
                             onSelectTab("salon")
                             viewModel?.setSalonSection("reviews")
+                        },
+                        onGoLive = { viewModel?.goLive() },
+                        onOpenSalonSection = { section ->
+                            onSelectTab("salon")
+                            viewModel?.setSalonSection(section)
                         }
                     )
 

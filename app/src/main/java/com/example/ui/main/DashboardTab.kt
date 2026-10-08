@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.OwnerDashboard
+import com.example.data.model.SalonSetupStatus
 import com.example.ui.auth.AuthUiState
 import com.example.ui.theme.CoralAccent
 import com.example.ui.theme.ErrorRed
@@ -72,7 +73,9 @@ fun DashboardTab(
     onToggleSalonActive: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
-    onOpenReviews: () -> Unit = {}
+    onOpenReviews: () -> Unit = {},
+    onGoLive: () -> Unit = {},
+    onOpenSalonSection: (String) -> Unit = {}
 ) {
 
     val lang = state.language
@@ -138,6 +141,19 @@ fun DashboardTab(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+
+        // Setup checklist: shown until the salon is live, and afterwards whenever something needs fixing.
+        state.setupStatus?.let { setup ->
+            if (!setup.isLive || setup.hasWarnings) {
+                SetupChecklistCard(
+                    setup = setup,
+                    isGoingLive = state.isGoingLive,
+                    onGoLive = onGoLive,
+                    onOpenSection = onOpenSalonSection
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
 
         // Salon Active Status Switch & Alert Banner
         Card(
@@ -461,5 +477,117 @@ fun StatCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Composable
+private fun SetupChecklistCard(
+    setup: SalonSetupStatus,
+    isGoingLive: Boolean,
+    onGoLive: () -> Unit,
+    onOpenSection: (String) -> Unit
+) {
+    val assignMissing = setup.missing.any { it.startsWith("Assign services") }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("card_setup_checklist"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = when {
+                    setup.isLive -> "Check your setup"
+                    !setup.isVerified -> "Set up your salon (approval pending)"
+                    setup.ready -> "Ready to go live!"
+                    else -> "Finish setup to go live"
+                },
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            if (!setup.isLive) {
+                Text(
+                    text = "Customers see your salon only after these steps.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SetupStep(1, "Opening hours & days", setup.hoursSet, "working_hours", onOpenSection)
+            SetupStep(2, "Services with price & time (${setup.serviceCount})", setup.serviceCount > 0, "services", onOpenSection)
+            SetupStep(
+                3, "Stylists, their days/hours & services (${setup.staffCount})",
+                setup.staffCount > 0 && !assignMissing, "staff", onOpenSection
+            )
+            SetupStep(4, "Salon location on map", setup.locationSet, "profile", onOpenSection)
+
+            val warnings = buildList {
+                if (setup.servicesWithoutStaff.isNotEmpty())
+                    add("No stylist does: ${setup.servicesWithoutStaff.joinToString()} — customers can't book it.")
+                if (setup.staffWithoutServices.isNotEmpty())
+                    add("No services ticked for: ${setup.staffWithoutServices.joinToString()}.")
+                if (setup.staffWithoutHours.isNotEmpty())
+                    add("No working days set for: ${setup.staffWithoutHours.joinToString()}.")
+            }
+            warnings.forEach { w ->
+                Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(w, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+
+            if (!setup.isLive) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onGoLive,
+                    enabled = setup.ready && setup.isVerified && !isGoingLive,
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_go_live"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen)
+                ) {
+                    if (isGoingLive) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(
+                            text = when {
+                                !setup.isVerified -> "Go Live (after admin approval)"
+                                !setup.ready -> "Go Live (finish the steps above)"
+                                else -> "Go Live"
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupStep(number: Int, title: String, done: Boolean, section: String, onOpenSection: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onOpenSection(section) }
+            .padding(vertical = 8.dp)
+            .testTag("setup_step_$number"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(if (done) SuccessGreen else MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (done) Icon(Icons.Default.CheckCircle, contentDescription = "Done", tint = Color.White, modifier = Modifier.size(16.dp))
+            else Text("$number", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(title, fontSize = 13.sp, modifier = Modifier.weight(1f), fontWeight = if (done) FontWeight.Normal else FontWeight.SemiBold)
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -737,17 +737,19 @@ fun AddEditServiceDialog(
                 }
 
                 staffList.forEach { staff ->
-                    val isChecked = state.serviceFormStaffIds.contains(staff.id)
+                    // All-rounders always do every service; their tick is fixed.
+                    val isChecked = staff.doesAllServices || state.serviceFormStaffIds.contains(staff.id)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { viewModel.toggleServiceStaffAssignment(staff.id) }
+                            .clickable(enabled = !staff.doesAllServices) { viewModel.toggleServiceStaffAssignment(staff.id) }
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(
                             checked = isChecked,
                             onCheckedChange = { viewModel.toggleServiceStaffAssignment(staff.id) },
+                            enabled = !staff.doesAllServices,
                             colors = CheckboxDefaults.colors(checkedColor = TerracottaPrimary)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -758,7 +760,7 @@ fun AddEditServiceDialog(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "(${staff.role ?: "Stylist"})",
+                            text = if (staff.doesAllServices) "(all services)" else "(${staff.role ?: "Stylist"})",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

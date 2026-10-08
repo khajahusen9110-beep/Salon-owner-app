@@ -161,8 +161,29 @@ data class Staff(
     @Json(name = "commission_percent") val commissionPercent: Double = 20.0,
     @Json(name = "rating_avg") val ratingAvg: Double = 4.8,
     @Json(name = "rating_count") val ratingCount: Int = 36,
-    @Json(name = "is_active") val isActive: Boolean = true
+    @Json(name = "is_active") val isActive: Boolean = true,
+    // All-rounder: linked to every service of the salon, including services added later.
+    @Json(name = "does_all_services") val doesAllServices: Boolean = false
 )
+
+/** Setup checklist from get_salon_setup_status: what is still missing before the salon can go live. */
+data class SalonSetupStatus(
+    val isVerified: Boolean = false,
+    val isActive: Boolean = false,
+    val isLive: Boolean = false,
+    val ready: Boolean = false,
+    val missing: List<String> = emptyList(),
+    val hoursSet: Boolean = false,
+    val serviceCount: Int = 0,
+    val staffCount: Int = 0,
+    val locationSet: Boolean = false,
+    val servicesWithoutStaff: List<String> = emptyList(),
+    val staffWithoutServices: List<String> = emptyList(),
+    val staffWithoutHours: List<String> = emptyList()
+) {
+    val hasWarnings: Boolean
+        get() = servicesWithoutStaff.isNotEmpty() || staffWithoutServices.isNotEmpty() || staffWithoutHours.isNotEmpty()
+}
 
 @JsonClass(generateAdapter = true)
 data class SalonService(
