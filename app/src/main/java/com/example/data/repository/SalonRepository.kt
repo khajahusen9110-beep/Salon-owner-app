@@ -184,7 +184,20 @@ class SalonRepository(
             .put("p_from", from)
             .put("p_to", toDate ?: from)
             .put("p_staff_id", staffId?.takeIf { it.isNotBlank() && it != "all" } ?: JSONObject.NULL)
-        JSONArray(SupabaseHttp.rpc("get_owner_bookings", params)).objects().map { parseBooking(it) }
+        withPayments(JSONArray(SupabaseHttp.rpc("get_owner_bookings", params)).objects().map { parseBooking(it) })
+    }
+
+    /** Adds what each customer already paid online (the owner collects only the rest). */
+    private fun withPayments(bookings: List<Booking>): List<Booking> {
+        val ids = bookings.filter { it.source != "walk_in" }.map { it.id }
+        if (ids.isEmpty()) return bookings
+        val pay = ids.chunked(80).flatMap { chunk ->
+            SupabaseHttp.select("bookings?select=id,payment_status,amount_paid&id=in.(${chunk.joinToString(",")})").objects()
+        }.associateBy { it.getString("id") }
+        return bookings.map { b ->
+            val p = pay[b.id] ?: return@map b
+            b.copy(paymentStatus = p.str("payment_status"), amountPaid = p.optDouble("amount_paid", 0.0))
+        }
     }
 
     suspend fun updateBookingStatus(bookingId: String, newStatus: String): SalonResult<Unit> = io {
@@ -402,6 +415,14 @@ class SalonRepository(
             .put("photos", JSONArray(request.photos))
             .put("cover_photo_index", request.coverPhotoIndex)
             .put("is_active", request.isActive)
+        val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
+        if (rows.length() == 0) throw SupabaseException("Salon not found.")
+        authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
+    }
+
+    /** Pins the salon on the map (customers' "nearby" search uses this point). */
+    suspend fun updateSalonLocation(salonId: String, latitude: Double, longitude: Double): SalonResult<Unit> = io {
+        val body = JSONObject().put("latitude", latitude).put("longitude", longitude)
         val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
         if (rows.length() == 0) throw SupabaseException("Salon not found.")
         authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))

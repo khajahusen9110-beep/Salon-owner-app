@@ -1392,6 +1392,21 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(editCoverPhotoIndex = index) }
     }
 
+    fun saveSalonLocation(latitude: Double, longitude: Double) {
+        val salon = _uiState.value.salon ?: return
+        viewModelScope.launch {
+            when (val res = salonRepo.updateSalonLocation(salon.id, latitude, longitude)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(
+                        salon = it.salon?.copy(latitude = latitude, longitude = longitude),
+                        infoMessage = "Salon location saved. Nearby customers will now see your salon."
+                    )
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(infoMessage = res.message) }
+            }
+        }
+    }
+
     fun saveSalonProfile() {
         val s = _uiState.value
         val salon = s.salon ?: return

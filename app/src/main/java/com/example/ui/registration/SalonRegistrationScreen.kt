@@ -2,6 +2,10 @@ package com.example.ui.registration
 
 import android.Manifest
 import android.content.Context
+import kotlinx.coroutines.launch
+import com.example.data.location.OwnerLocation
+import androidx.compose.runtime.rememberCoroutineScope
+import android.widget.Toast
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -85,7 +89,6 @@ import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TerracottaDark
 import com.example.ui.theme.TerracottaPrimary
 import com.example.util.SalonStrings
-import com.google.android.gms.location.LocationServices
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -134,19 +137,24 @@ fun SalonRegistrationScreen(
         }
     }
 
-    // Geolocation permission launcher
+    // Geolocation permission launcher: pins the salon where the owner is standing. Never guesses a location.
+    val locationScope = rememberCoroutineScope()
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            getCurrentLocation(context) { lat, lng ->
-                onSalonDetailsChange(null, null, null, null, null, null, null, lat, lng, null)
+            locationScope.launch {
+                val point = OwnerLocation.current(context)
+                if (point != null) {
+                    onSalonDetailsChange(null, null, null, null, null, null, null, point.first, point.second, null)
+                } else {
+                    Toast.makeText(context, "Couldn't get your location. Turn on GPS and try again.", Toast.LENGTH_LONG).show()
+                }
             }
         } else {
-            // Default Mumbai coords fallback
-            onSalonDetailsChange(null, null, null, null, null, null, null, 19.0760, 72.8777, null)
+            Toast.makeText(context, "Location permission is needed to pin your salon on the map.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1092,22 +1100,5 @@ fun Step3Verification(
                 }
             }
         }
-    }
-}
-
-private fun getCurrentLocation(context: Context, onLocationResult: (Double, Double) -> Unit) {
-    try {
-        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        fusedClient.lastLocation.addOnSuccessListener { location ->
-            if (location != null) {
-                onLocationResult(location.latitude, location.longitude)
-            } else {
-                onLocationResult(19.0760, 72.8777) // Mumbai default
-            }
-        }.addOnFailureListener {
-            onLocationResult(19.0760, 72.8777)
-        }
-    } catch (_: SecurityException) {
-        onLocationResult(19.0760, 72.8777)
     }
 }

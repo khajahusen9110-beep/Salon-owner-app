@@ -448,10 +448,20 @@ fun BookingCard(
                 }
 
                 Text(
-                    text = "₹${booking.price?.toInt() ?: 450}",
+                    text = "₹${booking.price?.toInt() ?: 0}",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = TerracottaPrimary
+                )
+            }
+
+            booking.paymentLabel?.let { label ->
+                Text(
+                    text = label,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF15803D),
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
 

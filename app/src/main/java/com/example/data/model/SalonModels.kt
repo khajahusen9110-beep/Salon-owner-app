@@ -130,8 +130,25 @@ data class Booking(
     @Json(name = "status") val status: String = "confirmed", // confirmed, arrived, in_service, completed, cancelled, no_show
     @Json(name = "price") val price: Double? = 0.0,
     @Json(name = "source") val source: String? = "online",
-    @Json(name = "notes") val notes: String? = null
-)
+    @Json(name = "notes") val notes: String? = null,
+    // Online payment by the customer: "not_required", "paid", "refund_pending", "refunded", "forfeited"...
+    @Json(name = "payment_status") val paymentStatus: String? = null,
+    @Json(name = "amount_paid") val amountPaid: Double = 0.0
+) {
+    /** Still to collect at the counter (price minus what the customer already paid online). */
+    val amountToCollect: Double
+        get() = if (paymentStatus == "paid") ((price ?: 0.0) - amountPaid).coerceAtLeast(0.0) else (price ?: 0.0)
+
+    /** Short payment line for cards, or null when the customer pays at the salon. */
+    val paymentLabel: String?
+        get() = when (paymentStatus) {
+            "paid" -> if (amountToCollect <= 0.0) "Paid online ₹${amountPaid.toInt()}"
+                      else "Advance ₹${amountPaid.toInt()} paid • collect ₹${amountToCollect.toInt()}"
+            "refund_pending", "refunded" -> "Refunded to customer"
+            "forfeited" -> "Advance ₹${amountPaid.toInt()} kept (late cancel / no-show)"
+            else -> null
+        }
+}
 
 @JsonClass(generateAdapter = true)
 data class Staff(
