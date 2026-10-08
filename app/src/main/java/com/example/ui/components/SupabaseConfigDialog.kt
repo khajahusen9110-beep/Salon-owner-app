@@ -64,7 +64,7 @@ fun SupabaseConfigDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "When left blank or in offline sandbox, the app runs in full offline demo mode so you can test all screens and flows seamlessly.",
+                    text = "Advanced: override the public Supabase key. Leave blank to use the built-in key.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )

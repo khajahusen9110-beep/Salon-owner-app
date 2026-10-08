@@ -162,8 +162,8 @@ fun SalonProfileSection(
                 }
 
                 // Rating & Review Count
-                val rating = salon?.ratingAvg ?: 4.8
-                val count = salon?.ratingCount ?: 124
+                val rating = salon?.ratingAvg ?: 0.0
+                val count = salon?.ratingCount ?: 0
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Star,
@@ -173,7 +173,7 @@ fun SalonProfileSection(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "%.1f".format(rating),
+                        text = if (count == 0) "New" else "%.1f".format(rating),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface

@@ -268,8 +268,8 @@ fun SalonSettingsTab(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         // Rating info
-                        val rating = salon?.ratingAvg ?: 4.8
-                        val count = salon?.ratingCount ?: 124
+                        val rating = salon?.ratingAvg ?: 0.0
+                        val count = salon?.ratingCount ?: 0
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -285,7 +285,7 @@ fun SalonSettingsTab(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "%.1f".format(rating),
+                                text = if (count == 0) "New" else "%.1f".format(rating),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
