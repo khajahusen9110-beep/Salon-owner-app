@@ -264,7 +264,8 @@ class SalonRepository(
             bufferMins = o.optInt("buffer_minutes", 0),
             isActive = o.optBoolean("is_active", true),
             assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") },
-            imageUrl = o.str("image_url")
+            imageUrl = o.str("image_url"),
+            weddingType = o.str("wedding_type")?.takeIf { it == "bridal" || it == "groom" }
         )
     }
 
@@ -518,6 +519,7 @@ class SalonRepository(
             .put("buffer_minutes", service.bufferMins ?: 0)
             .put("is_active", service.isActive)
             .put("image_url", service.imageUrl?.ifBlank { null } ?: JSONObject.NULL)
+            .put("wedding_type", service.weddingType ?: JSONObject.NULL)
         val saved = if (isUuid(service.id)) {
             SupabaseHttp.update("services", "id=eq.${service.id}", body).objects().firstOrNull()
                 ?: throw SupabaseException("Service not found.")

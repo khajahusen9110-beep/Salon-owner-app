@@ -198,7 +198,9 @@ data class SalonService(
     @Json(name = "buffer_mins") val bufferMins: Int? = 0,
     @Json(name = "is_active") val isActive: Boolean = true,
     @Json(name = "assigned_staff_ids") val assignedStaffIds: List<String> = emptyList(),
-    @Json(name = "image_url") val imageUrl: String? = null
+    @Json(name = "image_url") val imageUrl: String? = null,
+    /** null = regular service, "bridal" or "groom" = wedding service (bigger advance, longer notice). */
+    @Json(name = "wedding_type") val weddingType: String? = null
 )
 
 @JsonClass(generateAdapter = true)

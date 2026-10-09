@@ -166,6 +166,7 @@ data class AuthUiState(
     val serviceFormPrice: String = "",
     val serviceFormDurationMins: Int = 30, // 30, 60, 90, 120, 150, 180, 210, 240
     val serviceFormBufferMins: Int = 0, // 0, 5, 10, 15, 20, 30
+    val serviceFormWeddingType: String? = null, // null, "bridal", "groom"
     val serviceFormStaffIds: Set<String> = emptySet(),
     val isSavingService: Boolean = false,
 
@@ -1679,7 +1680,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormDurationMins = 30,
                 serviceFormBufferMins = 0,
                 serviceFormStaffIds = allStaffIds,
-                serviceFormImageUrl = null
+                serviceFormImageUrl = null,
+                serviceFormWeddingType = null
             )
         }
     }
@@ -1698,7 +1700,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormDurationMins = service.durationMins ?: 30,
                 serviceFormBufferMins = service.bufferMins ?: 0,
                 serviceFormStaffIds = assigned,
-                serviceFormImageUrl = service.imageUrl
+                serviceFormImageUrl = service.imageUrl,
+                serviceFormWeddingType = service.weddingType
             )
         }
     }
@@ -1712,6 +1715,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun updateServiceFormPrice(price: String) = _uiState.update { it.copy(serviceFormPrice = price) }
     fun updateServiceFormDuration(duration: Int) = _uiState.update { it.copy(serviceFormDurationMins = duration) }
     fun updateServiceFormBuffer(buffer: Int) = _uiState.update { it.copy(serviceFormBufferMins = buffer) }
+    fun updateServiceFormWeddingType(type: String?) = _uiState.update { it.copy(serviceFormWeddingType = type) }
 
     fun toggleServiceStaffAssignment(staffId: String) {
         val current = _uiState.value.serviceFormStaffIds.toMutableSet()
@@ -1750,7 +1754,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 isActive = true,
                 categoryId = s.serviceFormCategoryId,
                 bufferMins = s.serviceFormBufferMins,
-                imageUrl = s.serviceFormImageUrl
+                imageUrl = s.serviceFormImageUrl,
+                weddingType = s.serviceFormWeddingType
             )
             when (val res = salonRepo.saveSalonService(service, s.serviceFormStaffIds.toList())) {
                 is SalonResult.Success -> {

@@ -491,6 +491,15 @@ fun CategoryServiceGroupView(
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            srv.weddingType?.let { w ->
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (w == "groom") "GROOM" else "BRIDAL",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "₹${srv.price.toInt()}",
@@ -593,7 +602,7 @@ fun AddEditServiceDialog(
 
     // Fixed duration options: strictly 30, 60, 90, 120, 150, 180, 210, 240 mins
     // Any 5-minute step is allowed by the database (5-480); these are the common choices.
-    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300)
+    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360, 420, 480)
     val bufferOptions = listOf(0, 5, 10, 15, 20, 30)
 
     var durationExpanded by remember { mutableStateOf(false) }
@@ -747,6 +756,33 @@ fun AddEditServiceDialog(
                             )
                         }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Wedding service: bride / groom packages get wedding booking rules
+                Text("Wedding service?", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(null to "No", "bridal" to "Bridal (bride)", "groom" to "Groom").forEach { (key, label) ->
+                        FilterChip(
+                            selected = state.serviceFormWeddingType == key,
+                            onClick = { viewModel.updateServiceFormWeddingType(key) },
+                            label = { Text(label, fontSize = 12.sp) },
+                            modifier = Modifier.testTag("wedding_type_${key ?: "none"}")
+                        )
+                    }
+                }
+                if (state.serviceFormWeddingType != null) {
+                    Text(
+                        "Wedding bookings: customers can book months ahead and pay a bigger advance online. " +
+                            "Late cancellation keeps the advance (rules set by the platform).",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
