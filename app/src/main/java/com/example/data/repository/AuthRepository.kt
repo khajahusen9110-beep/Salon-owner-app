@@ -85,23 +85,30 @@ class AuthRepository(context: Context) {
         SupabaseHttp.signOut()
     }
 
-    suspend fun signUp(email: String, pass: String): AuthResult<AuthResponse> = withContext(Dispatchers.IO) {
-        try {
-            val json = SupabaseHttp.signUp(email.trim(), pass)
-            if (json.optString("access_token").isEmpty()) {
-                // Email confirmation is enabled: the account exists but there is no session yet.
-                return@withContext AuthResult.Error("Account created. Please confirm your email, then sign in.")
-            }
-            AuthResult.Success(json.toAuthResponse(email.trim()))
-        } catch (e: SupabaseException) {
-            AuthResult.Error(e.message ?: "Sign up failed", e.httpCode)
-        }
-    }
-
     suspend fun signIn(email: String, pass: String): AuthResult<AuthResponse> = withContext(Dispatchers.IO) {
         try {
             currentSalon = null
             AuthResult.Success(SupabaseHttp.signIn(email.trim(), pass).toAuthResponse(email.trim()))
+        } catch (e: SupabaseException) {
+            AuthResult.Error(e.message ?: "Login failed", e.httpCode)
+        }
+    }
+
+    /** Step 1 of mobile login: SMS an OTP to +91 [mobile10]. */
+    suspend fun sendOtp(mobile10: String): AuthResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            SupabaseHttp.sendPhoneOtp("+91$mobile10")
+            AuthResult.Success(Unit)
+        } catch (e: SupabaseException) {
+            AuthResult.Error(e.message ?: "Could not send OTP", e.httpCode)
+        }
+    }
+
+    /** Step 2: verify the OTP. A new number becomes a new account (it then registers a salon). */
+    suspend fun verifyOtp(mobile10: String, code: String): AuthResult<AuthResponse> = withContext(Dispatchers.IO) {
+        try {
+            currentSalon = null
+            AuthResult.Success(SupabaseHttp.verifyPhoneOtp("+91$mobile10", code).toAuthResponse(""))
         } catch (e: SupabaseException) {
             AuthResult.Error(e.message ?: "Login failed", e.httpCode)
         }

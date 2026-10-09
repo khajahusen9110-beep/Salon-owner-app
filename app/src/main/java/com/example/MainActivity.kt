@@ -20,7 +20,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.auth.AuthViewModel
 import com.example.ui.auth.LoginScreen
-import com.example.ui.auth.SignUpScreen
+import com.example.ui.auth.PhoneLoginScreen
 import com.example.ui.components.SupabaseConfigDialog
 import com.example.ui.main.MainAppShell
 import com.example.ui.registration.SalonRegistrationScreen
@@ -59,19 +59,21 @@ fun SalonOwnerApp(
 
     Crossfade(targetState = state.destinationRoute, label = "RouteTransition") { route ->
         when (route) {
-            "login" -> LoginScreen(
+            "login" -> PhoneLoginScreen(
                 state = state,
-                onLogin = { email, pass -> viewModel.login(email, pass) },
-                onNavigateToSignUp = { viewModel.navigateToSignUp() },
-                onLanguageChange = { lang -> viewModel.setLanguage(lang) },
-                onOpenConfig = { viewModel.toggleConfigDialog(true) }
+                onSendOtp = { mobile -> viewModel.sendLoginOtp(mobile) },
+                onVerifyOtp = { code -> viewModel.verifyLoginOtp(code) },
+                onChangeNumber = { viewModel.changeOtpNumber() },
+                onUseEmail = { viewModel.navigateToEmailLogin() },
+                onLanguageChange = { lang -> viewModel.setLanguage(lang) }
             )
 
-            "signup" -> SignUpScreen(
+            "email_login" -> LoginScreen(
                 state = state,
-                onSignUp = { email, pass, confirm -> viewModel.signUp(email, pass, confirm) },
-                onNavigateToLogin = { viewModel.navigateToLogin() },
-                onLanguageChange = { lang -> viewModel.setLanguage(lang) }
+                onLogin = { email, pass -> viewModel.login(email, pass) },
+                onNavigateToSignUp = { viewModel.navigateToLogin() },
+                onLanguageChange = { lang -> viewModel.setLanguage(lang) },
+                onOpenConfig = { viewModel.toggleConfigDialog(true) }
             )
 
             "register" -> SalonRegistrationScreen(

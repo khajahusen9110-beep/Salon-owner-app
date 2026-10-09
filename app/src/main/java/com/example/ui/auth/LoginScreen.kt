@@ -337,7 +337,7 @@ fun LoginScreen(
                     modifier = Modifier.testTag("signup_link")
                 ) {
                     Text(
-                        text = SalonStrings.get("need_account", lang),
+                        text = if (lang == "hi") "मोबाइल नंबर से लॉग इन / रजिस्टर करें" else "Log in or register with mobile number",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary

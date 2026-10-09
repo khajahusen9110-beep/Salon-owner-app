@@ -56,6 +56,9 @@ data class AuthUiState(
     val currentStep: Int = 1,
     // Step 1
     val ownerName: String = "",
+    // Mobile OTP login
+    val otpSent: Boolean = false,
+    val otpMobile: String = "",
     val regLanguage: String = "en",
     // Step 2
     val salonName: String = "",
@@ -262,7 +265,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             val savedEmail = authRepo.getUserEmail()
             val savedLang = authRepo.getSavedLanguage()
 
-            if (savedUserId != null && savedEmail != null) {
+            if (savedUserId != null) {
                 val user = SupabaseUser(id = savedUserId, email = savedEmail)
                 val profile = authRepo.fetchProfile(savedUserId)
                 val effectiveLang = profile?.language ?: savedLang
@@ -333,6 +336,78 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Auth Actions ---
 
+    /** After any successful sign-in: load profile + salon and open the right screen. */
+    private suspend fun onSignedIn(user: SupabaseUser) {
+        val profile = authRepo.fetchProfile(user.id)
+        val lang = profile?.language ?: _uiState.value.language
+        val salon = authRepo.fetchSalons().firstOrNull()
+        val route = determineRoute(user, salon)
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                user = user,
+                profile = profile,
+                salon = salon,
+                language = lang,
+                ownerName = it.ownerName.ifBlank { profile?.fullName.orEmpty() },
+                // Pre-fill the salon contact number with the verified mobile (owner can change it).
+                phone = it.phone.ifBlank { user.phone.orEmpty() },
+                destinationRoute = route,
+                currentStep = if (salon?.verificationStatus == "draft") 3 else 1,
+                otpSent = false
+            )
+        }
+        if (route == "main") {
+            startRealtimeSync()
+            loadDashboard()
+            loadTodayBookings()
+            loadStaffAndServices()
+            loadEarningsSummary()
+            loadSalonReviews()
+            loadNotifications()
+        }
+    }
+
+    /** Mobile login step 1: send the OTP. New numbers are registered automatically after verification. */
+    fun sendLoginOtp(mobile: String) {
+        val m = mobile.filter { it.isDigit() }
+        if (!Regex("^[6-9]\\d{9}$").matches(m)) {
+            _uiState.update { it.copy(errorMessage = "Enter a valid 10-digit mobile number") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            when (val res = authRepo.sendOtp(m)) {
+                is AuthResult.Success -> _uiState.update { it.copy(isLoading = false, otpSent = true, otpMobile = m) }
+                is AuthResult.Error -> _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Mobile login step 2: verify the OTP and continue to registration or the dashboard. */
+    fun verifyLoginOtp(code: String) {
+        val mobile = _uiState.value.otpMobile
+        if (code.length != 6) {
+            _uiState.update { it.copy(errorMessage = "Enter the 6-digit OTP") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            when (val res = authRepo.verifyOtp(mobile, code)) {
+                is AuthResult.Success -> {
+                    val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
+                    onSignedIn(SupabaseUser(id = uid, email = null, phone = mobile))
+                }
+                is AuthResult.Error -> _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    fun changeOtpNumber() {
+        _uiState.update { it.copy(otpSent = false, errorMessage = null) }
+    }
+
+    /** Email + password sign-in, kept for owners who registered with email before mobile login existed. */
     fun login(email: String, pass: String) {
         if (email.isBlank() || pass.isBlank()) {
             _uiState.update { it.copy(errorMessage = SalonStrings.get("err_fill_all", it.language)) }
@@ -344,33 +419,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             when (val res = authRepo.signIn(email, pass)) {
                 is AuthResult.Success -> {
                     val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
-                    val user = SupabaseUser(id = uid, email = email)
-                    val profile = authRepo.fetchProfile(uid)
-                    val lang = profile?.language ?: _uiState.value.language
-                    val salons = authRepo.fetchSalons()
-                    val salon = salons.firstOrNull()
-                    val route = determineRoute(user, salon)
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            user = user,
-                            profile = profile,
-                            salon = salon,
-                            language = lang,
-                            destinationRoute = route,
-                            currentStep = if (salon?.verificationStatus == "draft") 3 else 1
-                        )
-                    }
-                    if (route == "main") {
-                        startRealtimeSync()
-                        loadDashboard()
-                        loadTodayBookings()
-                        loadStaffAndServices()
-                        loadEarningsSummary()
-                        loadSalonReviews()
-                        loadNotifications()
-                    }
-
+                    onSignedIn(SupabaseUser(id = uid, email = email))
                 }
                 is AuthResult.Error -> {
                     _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
@@ -379,52 +428,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun signUp(email: String, pass: String, confirmPass: String) {
-        val lang = _uiState.value.language
-        if (email.isBlank() || pass.isBlank() || confirmPass.isBlank()) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_fill_all", lang)) }
-            return
-        }
-        if (pass.length < 6) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_pass_short", lang)) }
-            return
-        }
-        if (pass != confirmPass) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_pass_match", lang)) }
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            when (val res = authRepo.signUp(email, pass)) {
-                is AuthResult.Success -> {
-                    val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
-                    val user = SupabaseUser(id = uid, email = email)
-                    val profile = Profile(id = uid, language = lang)
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            user = user,
-                            profile = profile,
-                            salon = null,
-                            destinationRoute = "register",
-                            currentStep = 1
-                        )
-                    }
-                }
-                is AuthResult.Error -> {
-                    _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
-                }
-            }
-        }
-    }
-
-    fun navigateToSignUp() {
-        _uiState.update { it.copy(destinationRoute = "signup", errorMessage = null) }
+    fun navigateToEmailLogin() {
+        _uiState.update { it.copy(destinationRoute = "email_login", errorMessage = null) }
     }
 
     fun navigateToLogin() {
-        _uiState.update { it.copy(destinationRoute = "login", errorMessage = null) }
+        _uiState.update { it.copy(destinationRoute = "login", errorMessage = null, otpSent = false) }
     }
 
     /** Deletes the account; [onResult] gets null on success or an error message. */

@@ -131,10 +131,17 @@ object SupabaseHttp {
         return json
     }
 
-    fun signUp(email: String, password: String): JSONObject {
-        val body = JSONObject().put("email", email).put("password", password).toString()
-        val json = JSONObject(execute("POST", "$baseUrl/auth/v1/signup", body, authenticated = false))
-        saveSession(json, email)
+    /** Texts a login OTP to [phone] (E.164, e.g. +919876543210). A new number gets an account on verify. */
+    fun sendPhoneOtp(phone: String) {
+        val body = JSONObject().put("phone", phone).put("create_user", true).toString()
+        execute("POST", "$baseUrl/auth/v1/otp", body, authenticated = false)
+    }
+
+    /** Checks the SMS code and stores the session. */
+    fun verifyPhoneOtp(phone: String, code: String): JSONObject {
+        val body = JSONObject().put("type", "sms").put("phone", phone).put("token", code).toString()
+        val json = JSONObject(execute("POST", "$baseUrl/auth/v1/verify", body, authenticated = false))
+        saveSession(json)
         return json
     }
 
@@ -269,6 +276,10 @@ object SupabaseHttp {
         val m = raw.lowercase()
         return when {
             m.contains("invalid login credentials") -> "Incorrect email or password."
+            m.contains("token has expired") || m.contains("otp") && m.contains("invalid") || m.contains("expired") && m.contains("token") ->
+                "Wrong or expired OTP. Please check the code or request a new one."
+            m.contains("only request this after") -> "Please wait a minute before asking for another OTP."
+            m.contains("sms") || m.contains("phone provider") || m.contains("hook") -> "Could not send the OTP SMS. Please try again."
             m.contains("email not confirmed") -> "Please confirm your email address, then sign in."
             m.contains("user already registered") -> "An account with this email already exists. Please sign in."
             m.contains("password should be") -> "Password must be at least 6 characters."

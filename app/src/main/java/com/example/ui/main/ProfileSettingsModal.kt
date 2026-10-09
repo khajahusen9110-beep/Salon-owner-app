@@ -152,16 +152,18 @@ fun ProfileSettingsModal(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        val contact = user?.email?.takeIf { it.isNotBlank() }
+                            ?: (user?.phone ?: state.profile?.phone)?.takeIf { it.isNotBlank() }?.let { "+91 ${it.takeLast(10)}" }
+                        if (contact != null) Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Email,
+                                imageVector = if (user?.email.isNullOrBlank()) Icons.Default.Phone else Icons.Default.Email,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = user?.email ?: "owner@salon.com",
+                                text = contact,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
