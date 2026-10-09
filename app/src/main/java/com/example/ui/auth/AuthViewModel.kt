@@ -21,6 +21,7 @@ import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SupabaseUser
+import com.example.data.model.SalonSetupStatus
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.repository.AuthRepository
@@ -55,6 +56,9 @@ data class AuthUiState(
     val currentStep: Int = 1,
     // Step 1
     val ownerName: String = "",
+    // Mobile OTP login
+    val otpSent: Boolean = false,
+    val otpMobile: String = "",
     val regLanguage: String = "en",
     // Step 2
     val salonName: String = "",
@@ -178,6 +182,15 @@ data class AuthUiState(
     val staffHoursList: List<StaffHours> = emptyList(),
     val staffSelectedServiceIds: Set<String> = emptySet(),
     val isSavingStaffDetails: Boolean = false,
+    val staffFormAllServices: Boolean = false,
+    val staffFormServiceIds: Set<String> = emptySet(),
+    val staffDetailAllServices: Boolean = false,
+    // Upcoming bookings affected by removing services from a stylist (asks the owner to confirm).
+    val staffServiceRemovalWarning: Int? = null,
+
+    // Setup checklist / Go Live
+    val setupStatus: SalonSetupStatus? = null,
+    val isGoingLive: Boolean = false,
 
     // Salon Working Hours
     val salonHoursList: List<SalonHours> = emptyList(),
@@ -252,7 +265,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             val savedEmail = authRepo.getUserEmail()
             val savedLang = authRepo.getSavedLanguage()
 
-            if (savedUserId != null && savedEmail != null) {
+            if (savedUserId != null) {
                 val user = SupabaseUser(id = savedUserId, email = savedEmail)
                 val profile = authRepo.fetchProfile(savedUserId)
                 val effectiveLang = profile?.language ?: savedLang
@@ -301,7 +314,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         if (salon == null) return "register"
         return when (salon.verificationStatus.lowercase()) {
             "pending" -> "pending"
-            "rejected" -> "rejected"
+            "rejected", "suspended" -> "rejected"
             "approved" -> "main"
             "draft" -> "register"
             else -> "register"
@@ -323,6 +336,78 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Auth Actions ---
 
+    /** After any successful sign-in: load profile + salon and open the right screen. */
+    private suspend fun onSignedIn(user: SupabaseUser) {
+        val profile = authRepo.fetchProfile(user.id)
+        val lang = profile?.language ?: _uiState.value.language
+        val salon = authRepo.fetchSalons().firstOrNull()
+        val route = determineRoute(user, salon)
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                user = user,
+                profile = profile,
+                salon = salon,
+                language = lang,
+                ownerName = it.ownerName.ifBlank { profile?.fullName.orEmpty() },
+                // Pre-fill the salon contact number with the verified mobile (owner can change it).
+                phone = it.phone.ifBlank { user.phone.orEmpty() },
+                destinationRoute = route,
+                currentStep = if (salon?.verificationStatus == "draft") 3 else 1,
+                otpSent = false
+            )
+        }
+        if (route == "main") {
+            startRealtimeSync()
+            loadDashboard()
+            loadTodayBookings()
+            loadStaffAndServices()
+            loadEarningsSummary()
+            loadSalonReviews()
+            loadNotifications()
+        }
+    }
+
+    /** Mobile login step 1: send the OTP. New numbers are registered automatically after verification. */
+    fun sendLoginOtp(mobile: String) {
+        val m = mobile.filter { it.isDigit() }
+        if (!Regex("^[6-9]\\d{9}$").matches(m)) {
+            _uiState.update { it.copy(errorMessage = "Enter a valid 10-digit mobile number") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            when (val res = authRepo.sendOtp(m)) {
+                is AuthResult.Success -> _uiState.update { it.copy(isLoading = false, otpSent = true, otpMobile = m) }
+                is AuthResult.Error -> _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Mobile login step 2: verify the OTP and continue to registration or the dashboard. */
+    fun verifyLoginOtp(code: String) {
+        val mobile = _uiState.value.otpMobile
+        if (code.length != 6) {
+            _uiState.update { it.copy(errorMessage = "Enter the 6-digit OTP") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            when (val res = authRepo.verifyOtp(mobile, code)) {
+                is AuthResult.Success -> {
+                    val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
+                    onSignedIn(SupabaseUser(id = uid, email = null, phone = mobile))
+                }
+                is AuthResult.Error -> _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    fun changeOtpNumber() {
+        _uiState.update { it.copy(otpSent = false, errorMessage = null) }
+    }
+
+    /** Email + password sign-in, kept for owners who registered with email before mobile login existed. */
     fun login(email: String, pass: String) {
         if (email.isBlank() || pass.isBlank()) {
             _uiState.update { it.copy(errorMessage = SalonStrings.get("err_fill_all", it.language)) }
@@ -334,33 +419,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             when (val res = authRepo.signIn(email, pass)) {
                 is AuthResult.Success -> {
                     val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
-                    val user = SupabaseUser(id = uid, email = email)
-                    val profile = authRepo.fetchProfile(uid)
-                    val lang = profile?.language ?: _uiState.value.language
-                    val salons = authRepo.fetchSalons()
-                    val salon = salons.firstOrNull()
-                    val route = determineRoute(user, salon)
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            user = user,
-                            profile = profile,
-                            salon = salon,
-                            language = lang,
-                            destinationRoute = route,
-                            currentStep = if (salon?.verificationStatus == "draft") 3 else 1
-                        )
-                    }
-                    if (route == "main") {
-                        startRealtimeSync()
-                        loadDashboard()
-                        loadTodayBookings()
-                        loadStaffAndServices()
-                        loadEarningsSummary()
-                        loadSalonReviews()
-                        loadNotifications()
-                    }
-
+                    onSignedIn(SupabaseUser(id = uid, email = email))
                 }
                 is AuthResult.Error -> {
                     _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
@@ -369,52 +428,29 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun signUp(email: String, pass: String, confirmPass: String) {
-        val lang = _uiState.value.language
-        if (email.isBlank() || pass.isBlank() || confirmPass.isBlank()) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_fill_all", lang)) }
-            return
-        }
-        if (pass.length < 6) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_pass_short", lang)) }
-            return
-        }
-        if (pass != confirmPass) {
-            _uiState.update { it.copy(errorMessage = SalonStrings.get("err_pass_match", lang)) }
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            when (val res = authRepo.signUp(email, pass)) {
-                is AuthResult.Success -> {
-                    val uid = res.data.user?.id ?: authRepo.getUserId() ?: ""
-                    val user = SupabaseUser(id = uid, email = email)
-                    val profile = Profile(id = uid, language = lang)
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            user = user,
-                            profile = profile,
-                            salon = null,
-                            destinationRoute = "register",
-                            currentStep = 1
-                        )
-                    }
-                }
-                is AuthResult.Error -> {
-                    _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
-                }
-            }
-        }
-    }
-
-    fun navigateToSignUp() {
-        _uiState.update { it.copy(destinationRoute = "signup", errorMessage = null) }
+    fun navigateToEmailLogin() {
+        _uiState.update { it.copy(destinationRoute = "email_login", errorMessage = null) }
     }
 
     fun navigateToLogin() {
-        _uiState.update { it.copy(destinationRoute = "login", errorMessage = null) }
+        _uiState.update { it.copy(destinationRoute = "login", errorMessage = null, otpSent = false) }
+    }
+
+    /** Deletes the account; [onResult] gets null on success or an error message. */
+    fun deleteAccount(onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            when (val res = salonRepo.deleteMyAccount()) {
+                is SalonResult.Success -> {
+                    realtimeSyncJob?.cancel()
+                    _uiState.update {
+                        it.copy(user = null, profile = null, salon = null, destinationRoute = "login", currentStep = 1,
+                            errorMessage = null, selectedTab = "today", infoMessage = "Your account has been deleted.")
+                    }
+                    onResult(null)
+                }
+                is SalonResult.Error -> onResult(res.message)
+            }
+        }
     }
 
     fun signOut() {
@@ -567,9 +603,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val salonId = s.salon?.id ?: "salon-temp-id"
+        val salonId = s.salon?.id ?: ""
+        val fileBytes = s.documentBytes
+        if (fileBytes == null || fileBytes.isEmpty()) {
+            _uiState.update { it.copy(errorMessage = "Please choose a document to upload.") }
+            return
+        }
         val fileName = s.documentName ?: "doc_${System.currentTimeMillis()}.jpg"
-        val fileBytes = s.documentBytes ?: ByteArray(10) { 0 }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
@@ -634,11 +674,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun simulateStatusChange(newStatus: String, reason: String? = null) {
-        salonRepo.simulateAdminDecision(newStatus, reason)
-        refreshStatus()
-    }
-
     // ==========================================
     // PART 2: App Shell, Dashboard, and Today's Schedule
     // ==========================================
@@ -665,7 +700,34 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     }
 
+    fun loadSetupStatus() {
+        viewModelScope.launch {
+            val res = salonRepo.getSetupStatus()
+            if (res is SalonResult.Success) _uiState.update { it.copy(setupStatus = res.data) }
+        }
+    }
+
+    /** Makes the salon visible to customers. The server refuses while setup is incomplete. */
+    fun goLive() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGoingLive = true) }
+            when (val res = salonRepo.updateSalonActive(true)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(
+                        isGoingLive = false,
+                        salon = it.salon?.copy(isActive = true),
+                        dashboard = it.dashboard?.copy(isActive = true),
+                        infoMessage = "Your salon is LIVE. Customers can now book."
+                    )
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isGoingLive = false, errorMessage = res.message) }
+            }
+            loadSetupStatus()
+        }
+    }
+
     fun loadDashboard() {
+        loadSetupStatus()
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingDashboard = true) }
             when (val res = salonRepo.getOwnerDashboard()) {
@@ -726,6 +788,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadStaffAndServices() {
+        loadSetupStatus()
         viewModelScope.launch {
             val staff = salonRepo.getStaff()
             val services = salonRepo.getServices()
@@ -758,6 +821,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(isLoading = false, errorMessage = res.message) }
                 }
             }
+            loadSetupStatus()
         }
     }
 
@@ -1376,6 +1440,22 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(editCoverPhotoIndex = index) }
     }
 
+    fun saveSalonLocation(latitude: Double, longitude: Double) {
+        val salon = _uiState.value.salon ?: return
+        viewModelScope.launch {
+            when (val res = salonRepo.updateSalonLocation(salon.id, latitude, longitude)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(
+                        salon = it.salon?.copy(latitude = latitude, longitude = longitude),
+                        infoMessage = "Salon location saved. Nearby customers will now see your salon."
+                    )
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(infoMessage = res.message) }
+            }
+            loadSetupStatus()
+        }
+    }
+
     fun saveSalonProfile() {
         val s = _uiState.value
         val salon = s.salon ?: return
@@ -1395,7 +1475,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 coverPhotoIndex = s.editCoverPhotoIndex,
                 isActive = s.editSalonIsActive
             )
-            salonRepo.updateSalonProfile(salon.id, req)
+            val saveRes = salonRepo.updateSalonProfile(salon.id, req)
+            if (saveRes is SalonResult.Error) {
+                _uiState.update { it.copy(isSavingSalonProfile = false, errorMessage = saveRes.message) }
+                loadSetupStatus()
+                return@launch
+            }
             val updatedSalon = salon.copy(
                 name = req.name,
                 description = req.description,
@@ -1562,13 +1647,17 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 categoryId = s.serviceFormCategoryId,
                 bufferMins = s.serviceFormBufferMins
             )
-            salonRepo.saveSalonService(service, s.serviceFormStaffIds.toList())
-            closeServiceDialog()
-            _uiState.update {
-                it.copy(
-                    isSavingService = false,
-                    infoMessage = SalonStrings.get(it.language, "service_saved_success")
-                )
+            when (val res = salonRepo.saveSalonService(service, s.serviceFormStaffIds.toList())) {
+                is SalonResult.Success -> {
+                    closeServiceDialog()
+                    _uiState.update {
+                        it.copy(
+                            isSavingService = false,
+                            infoMessage = SalonStrings.get(it.language, "service_saved_success")
+                        )
+                    }
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingService = false, errorMessage = res.message) }
             }
             loadStaffAndServices()
         }
@@ -1676,7 +1765,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 showAddStaffDialog = true,
                 staffFormName = "",
                 staffFormCommission = "20",
-                staffFormPhotoUrl = null
+                staffFormPhotoUrl = null,
+                staffFormAllServices = false,
+                staffFormServiceIds = emptySet()
             )
         }
     }
@@ -1688,6 +1779,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun updateStaffFormName(name: String) = _uiState.update { it.copy(staffFormName = name) }
     fun updateStaffFormCommission(commission: String) = _uiState.update { it.copy(staffFormCommission = commission) }
     fun updateStaffFormPhoto(photo: String?) = _uiState.update { it.copy(staffFormPhotoUrl = photo) }
+    fun updateStaffFormAllServices(all: Boolean) = _uiState.update { it.copy(staffFormAllServices = all) }
+    fun toggleStaffFormService(serviceId: String) = _uiState.update {
+        val cur = it.staffFormServiceIds
+        it.copy(staffFormServiceIds = if (serviceId in cur) cur - serviceId else cur + serviceId)
+    }
 
     fun saveStaffMember() {
         val s = _uiState.value
@@ -1700,19 +1796,26 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingStaff = true) }
-            salonRepo.addStaffMember(
+            val res = salonRepo.addStaffMember(
                 salonId = salonId,
                 name = s.staffFormName.trim(),
                 commissionPercent = comm,
-                photoUrl = s.staffFormPhotoUrl
+                photoUrl = s.staffFormPhotoUrl,
+                doesAllServices = s.staffFormAllServices,
+                serviceIds = s.staffFormServiceIds.toList()
             )
-            closeAddStaffDialog()
-            loadStaffAndServices()
-            _uiState.update {
-                it.copy(
-                    isSavingStaff = false,
-                    infoMessage = SalonStrings.get(it.language, "staff_saved_success")
-                )
+            when (res) {
+                is SalonResult.Success -> {
+                    closeAddStaffDialog()
+                    loadStaffAndServices()
+                    _uiState.update {
+                        it.copy(
+                            isSavingStaff = false,
+                            infoMessage = SalonStrings.get(it.language, "staff_saved_success")
+                        )
+                    }
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingStaff = false, errorMessage = res.message) }
             }
         }
     }
@@ -1729,7 +1832,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     selectedStaffForDetail = staff,
                     staffHoursList = hours,
-                    staffSelectedServiceIds = assignedSrvs
+                    staffSelectedServiceIds = assignedSrvs,
+                    staffDetailAllServices = staff.doesAllServices,
+                    staffServiceRemovalWarning = null
                 )
             }
         }
@@ -1754,13 +1859,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val staff = _uiState.value.selectedStaffForDetail ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingStaffDetails = true) }
-            salonRepo.saveStaffHours(staff.id, _uiState.value.staffHoursList)
-            _uiState.update {
-                it.copy(
-                    isSavingStaffDetails = false,
-                    infoMessage = "Working hours saved for ${staff.name}"
-                )
+            when (val res = salonRepo.saveStaffHours(staff.id, _uiState.value.staffHoursList)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(isSavingStaffDetails = false, infoMessage = "Working hours saved for ${staff.name}")
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingStaffDetails = false, errorMessage = res.message) }
             }
+            loadSetupStatus()
         }
     }
 
@@ -1770,17 +1875,41 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(staffSelectedServiceIds = current) }
     }
 
-    fun saveStaffAssignedServices() {
+    fun setStaffDetailAllServices(all: Boolean) = _uiState.update { it.copy(staffDetailAllServices = all) }
+
+    fun dismissStaffServiceRemovalWarning() = _uiState.update { it.copy(staffServiceRemovalWarning = null) }
+
+    /**
+     * Saves a stylist's services. If the change removes services that already have upcoming bookings
+     * with this stylist, the owner is asked first ([confirmed] = true skips the question). Existing
+     * bookings are never cancelled by this.
+     */
+    fun saveStaffAssignedServices(confirmed: Boolean = false) {
         val staff = _uiState.value.selectedStaffForDetail ?: return
+        val st = _uiState.value
         viewModelScope.launch {
-            _uiState.update { it.copy(isSavingStaffDetails = true) }
-            salonRepo.saveStaffServicesForStaff(staff.id, _uiState.value.staffSelectedServiceIds.toList())
-            loadStaffAndServices()
-            _uiState.update {
-                it.copy(
-                    isSavingStaffDetails = false,
-                    infoMessage = "Assigned services saved for ${staff.name}"
-                )
+            _uiState.update { it.copy(isSavingStaffDetails = true, staffServiceRemovalWarning = null) }
+            if (!confirmed && !st.staffDetailAllServices) {
+                val before = st.servicesList.filter { it.assignedStaffIds.contains(staff.id) }.map { it.id }
+                val removed = before - st.staffSelectedServiceIds
+                val affected = (salonRepo.countFutureBookingsFor(staff.id, removed) as? SalonResult.Success)?.data ?: 0
+                if (affected > 0) {
+                    _uiState.update { it.copy(isSavingStaffDetails = false, staffServiceRemovalWarning = affected) }
+                    return@launch
+                }
+            }
+            when (val res = salonRepo.saveStaffServicesForStaff(staff.id, st.staffSelectedServiceIds.toList(), st.staffDetailAllServices)) {
+                is SalonResult.Success -> {
+                    loadStaffAndServices()
+                    _uiState.update {
+                        it.copy(
+                            isSavingStaffDetails = false,
+                            selectedStaffForDetail = staff.copy(doesAllServices = st.staffDetailAllServices),
+                            infoMessage = "Services saved for ${staff.name}"
+                        )
+                    }
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingStaffDetails = false, errorMessage = res.message) }
             }
         }
     }
@@ -1818,13 +1947,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val salonId = _uiState.value.salon?.id ?: "salon-1"
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingSalonHours = true) }
-            salonRepo.saveSalonHours(salonId, _uiState.value.salonHoursList)
-            _uiState.update {
-                it.copy(
-                    isSavingSalonHours = false,
-                    infoMessage = "Salon operating hours updated successfully"
-                )
+            when (val res = salonRepo.saveSalonHours(salonId, _uiState.value.salonHoursList)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(isSavingSalonHours = false, infoMessage = "Salon operating hours updated successfully")
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingSalonHours = false, errorMessage = res.message) }
             }
+            loadSetupStatus()
         }
     }
 

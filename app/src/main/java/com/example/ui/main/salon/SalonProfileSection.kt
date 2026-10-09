@@ -1,5 +1,9 @@
 package com.example.ui.main.salon
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,23 +55,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import com.example.data.location.OwnerLocation
 import com.example.ui.auth.AuthUiState
 import com.example.ui.auth.AuthViewModel
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TerracottaPrimary
 import com.example.util.SalonStrings
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -162,8 +171,8 @@ fun SalonProfileSection(
                 }
 
                 // Rating & Review Count
-                val rating = salon?.ratingAvg ?: 4.8
-                val count = salon?.ratingCount ?: 124
+                val rating = salon?.ratingAvg ?: 0.0
+                val count = salon?.ratingCount ?: 0
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Star,
@@ -173,7 +182,7 @@ fun SalonProfileSection(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "%.1f".format(rating),
+                        text = if (count == 0) "New" else "%.1f".format(rating),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -509,6 +518,15 @@ fun SalonProfileSection(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        // Map pin: lets customers find the salon in "nearby" search
+        SalonMapPinCard(
+            latitude = state.salon?.latitude,
+            longitude = state.salon?.longitude,
+            onLocated = { lat, lng -> viewModel.saveSalonLocation(lat, lng) }
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
         // Save Button
         Button(
             onClick = { viewModel.saveSalonProfile() },
@@ -598,5 +616,69 @@ fun SalonProfileSection(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun SalonMapPinCard(latitude: Double?, longitude: Double?, onLocated: (Double, Double) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun locate() {
+        busy = true
+        error = null
+        scope.launch {
+            val point = OwnerLocation.current(context)
+            busy = false
+            if (point == null) error = "Couldn't get your location. Turn on GPS and try again."
+            else onLocated(point.first, point.second)
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.any { it }) locate()
+        else error = "Location permission is needed to pin your salon on the map."
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth().testTag("card_salon_map_pin")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Salon location on map", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (latitude != null && longitude != null)
+                    "Pinned at ${"%.5f".format(latitude)}, ${"%.5f".format(longitude)}. Nearby customers can find you."
+                else "Not pinned yet — customers searching nearby won't see your salon.",
+                fontSize = 12.sp,
+                color = if (latitude != null) Color(0xFF15803D) else MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = "Stand inside your salon, then tap the button.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            error?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = {
+                    val granted = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+                        .any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+                    if (granted) locate()
+                    else permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                },
+                enabled = !busy,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().testTag("btn_pin_salon_location")
+            ) {
+                if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Text(if (latitude != null) "Update to my current location" else "Use my current location")
+            }
+        }
     }
 }

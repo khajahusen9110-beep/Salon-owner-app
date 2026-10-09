@@ -574,7 +574,8 @@ fun AddEditServiceDialog(
     val staffList = state.staffList
 
     // Fixed duration options: strictly 30, 60, 90, 120, 150, 180, 210, 240 mins
-    val validDurations = listOf(30, 60, 90, 120, 150, 180, 210, 240)
+    // Any 5-minute step is allowed by the database (5-480); these are the common choices.
+    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300)
     val bufferOptions = listOf(0, 5, 10, 15, 20, 30)
 
     var durationExpanded by remember { mutableStateOf(false) }
@@ -671,7 +672,7 @@ fun AddEditServiceDialog(
                     ) {
                         validDurations.forEach { d ->
                             DropdownMenuItem(
-                                text = { Text("$d minutes") },
+                                text = { Text(if (d < 60) "$d min" else if (d % 60 == 0) "${d / 60} hr" else "${d / 60} hr ${d % 60} min") },
                                 onClick = {
                                     viewModel.updateServiceFormDuration(d)
                                     durationExpanded = false
@@ -736,17 +737,19 @@ fun AddEditServiceDialog(
                 }
 
                 staffList.forEach { staff ->
-                    val isChecked = state.serviceFormStaffIds.contains(staff.id)
+                    // All-rounders always do every service; their tick is fixed.
+                    val isChecked = staff.doesAllServices || state.serviceFormStaffIds.contains(staff.id)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { viewModel.toggleServiceStaffAssignment(staff.id) }
+                            .clickable(enabled = !staff.doesAllServices) { viewModel.toggleServiceStaffAssignment(staff.id) }
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(
                             checked = isChecked,
                             onCheckedChange = { viewModel.toggleServiceStaffAssignment(staff.id) },
+                            enabled = !staff.doesAllServices,
                             colors = CheckboxDefaults.colors(checkedColor = TerracottaPrimary)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -757,7 +760,7 @@ fun AddEditServiceDialog(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "(${staff.role ?: "Stylist"})",
+                            text = if (staff.doesAllServices) "(all services)" else "(${staff.role ?: "Stylist"})",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -3,235 +3,167 @@ package com.example.data.repository
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.model.AuthResponse
-import com.example.data.model.LoginRequest
 import com.example.data.model.Profile
 import com.example.data.model.Salon
-import com.example.data.model.SignUpRequest
 import com.example.data.model.SupabaseUser
-import com.example.data.network.SupabaseClient
-import com.example.data.network.SupabaseConfig
+import com.example.data.network.SupabaseException
+import com.example.data.network.SupabaseHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 sealed class AuthResult<out T> {
     data class Success<out T>(val data: T) : AuthResult<T>()
     data class Error(val message: String, val code: Int? = null) : AuthResult<Nothing>()
 }
 
-class AuthRepository(private val context: Context) {
+class AuthRepository(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("salon_auth_prefs", Context.MODE_PRIVATE)
 
-    companion object {
-        private const val KEY_ACCESS_TOKEN = "access_token"
-        private const val KEY_USER_ID = "user_id"
-        private const val KEY_USER_EMAIL = "user_email"
-        private const val KEY_LANGUAGE = "user_language"
+    /** The owner's salon as last loaded from the server (owners have at most one salon). */
+    @Volatile
+    private var currentSalon: Salon? = null
+
+    init {
+        SupabaseHttp.init(context)
     }
 
-    fun getAccessToken(): String? = prefs.getString(KEY_ACCESS_TOKEN, null)
-    fun getUserId(): String? = prefs.getString(KEY_USER_ID, null)
-    fun getUserEmail(): String? = prefs.getString(KEY_USER_EMAIL, null)
+    companion object {
+        private const val KEY_LANGUAGE = "user_language"
+        private const val SALON_COLUMNS =
+            "id,owner_id,name,description,salon_type,address,area,city,pincode,phone,latitude,longitude," +
+                "gst_number,verification_status,rejection_reason,photos,cover_photo_index,is_verified," +
+                "rating_avg,rating_count,slot_interval_minutes,booking_window_days,min_notice_minutes," +
+                "late_threshold_minutes,late_credit_amount,is_active"
+
+        fun parseSalon(o: JSONObject): Salon {
+            val photos = o.optJSONArray("photos") ?: JSONArray()
+            return Salon(
+                id = o.getString("id"),
+                ownerId = o.optStringOrNull("owner_id"),
+                name = o.optString("name"),
+                description = o.optStringOrNull("description"),
+                salonType = o.optString("salon_type", "unisex"),
+                address = o.optStringOrNull("address").orEmpty(),
+                area = o.optString("area"),
+                city = o.optString("city"),
+                pincode = o.optStringOrNull("pincode").orEmpty(),
+                phone = o.optStringOrNull("phone").orEmpty(),
+                latitude = if (o.isNull("latitude")) null else o.optDouble("latitude"),
+                longitude = if (o.isNull("longitude")) null else o.optDouble("longitude"),
+                gstNumber = o.optStringOrNull("gst_number"),
+                verificationStatus = o.optString("verification_status", "draft"),
+                rejectionReason = o.optStringOrNull("rejection_reason"),
+                photos = (0 until photos.length()).map { photos.getString(it) },
+                coverPhotoIndex = o.optInt("cover_photo_index", 0),
+                isVerified = o.optBoolean("is_verified", false),
+                ratingAvg = o.optDouble("rating_avg", 0.0),
+                ratingCount = o.optInt("rating_count", 0),
+                slotIntervalMinutes = o.optInt("slot_interval_minutes", 30),
+                bookingWindowDays = o.optInt("booking_window_days", 7),
+                minNoticeMinutes = o.optInt("min_notice_minutes", 30),
+                lateThresholdMinutes = o.optInt("late_threshold_minutes", 15),
+                lateCreditAmount = o.optDouble("late_credit_amount", 0.0),
+                isActive = o.optBoolean("is_active", true)
+            )
+        }
+    }
+
+    fun getAccessToken(): String? = if (SupabaseHttp.hasSession) SupabaseHttp.accessToken else null
+    fun getUserId(): String? = if (SupabaseHttp.hasSession) SupabaseHttp.userId else null
+    fun getUserEmail(): String? = if (SupabaseHttp.hasSession) SupabaseHttp.userEmail else null
     fun getSavedLanguage(): String = prefs.getString(KEY_LANGUAGE, "en") ?: "en"
 
     fun saveLanguage(lang: String) {
         prefs.edit().putString(KEY_LANGUAGE, lang).apply()
     }
 
-    fun saveSession(token: String, userId: String, email: String) {
-        prefs.edit()
-            .putString(KEY_ACCESS_TOKEN, token)
-            .putString(KEY_USER_ID, userId)
-            .putString(KEY_USER_EMAIL, email)
-            .apply()
-    }
-
     fun clearSession() {
-        prefs.edit()
-            .remove(KEY_ACCESS_TOKEN)
-            .remove(KEY_USER_ID)
-            .remove(KEY_USER_EMAIL)
-            .apply()
+        currentSalon = null
+        SupabaseHttp.signOut()
     }
 
-    suspend fun signUp(email: String, pass: String): AuthResult<AuthResponse> =
-        withContext(Dispatchers.IO) {
-            val anonKey = SupabaseConfig.getAnonKey(context)
-            if (anonKey.isBlank()) {
-                // Safe testing mode when anon key has not been entered yet
-                val demoId = UUID.randomUUID().toString()
-                saveSession("demo-token-$demoId", demoId, email)
-                return@withContext AuthResult.Success(
-                    AuthResponse(
-                        accessToken = "demo-token-$demoId",
-                        user = SupabaseUser(id = demoId, email = email)
-                    )
-                )
-            }
-
-            try {
-                val response = SupabaseClient.authApi.signUp(
-                    apiKey = anonKey,
-                    request = SignUpRequest(email = email.trim(), password = pass)
-                )
-                if (response.isSuccessful && response.body() != null) {
-                    val authBody = response.body()!!
-                    val token = authBody.accessToken ?: "session_created"
-                    val uid = authBody.user?.id ?: UUID.randomUUID().toString()
-                    saveSession(token, uid, email)
-                    AuthResult.Success(authBody)
-                } else {
-                    val err = response.errorBody()?.string() ?: "Sign up failed (${response.code()})"
-                    AuthResult.Error(err, response.code())
-                }
-            } catch (e: Exception) {
-                // If network fails (e.g. offline preview), provide graceful local user session
-                val demoId = UUID.randomUUID().toString()
-                saveSession("local-token-$demoId", demoId, email)
-                AuthResult.Success(
-                    AuthResponse(
-                        accessToken = "local-token-$demoId",
-                        user = SupabaseUser(id = demoId, email = email)
-                    )
-                )
-            }
+    suspend fun signIn(email: String, pass: String): AuthResult<AuthResponse> = withContext(Dispatchers.IO) {
+        try {
+            currentSalon = null
+            AuthResult.Success(SupabaseHttp.signIn(email.trim(), pass).toAuthResponse(email.trim()))
+        } catch (e: SupabaseException) {
+            AuthResult.Error(e.message ?: "Login failed", e.httpCode)
         }
+    }
 
-    suspend fun signIn(email: String, pass: String): AuthResult<AuthResponse> =
-        withContext(Dispatchers.IO) {
-            val anonKey = SupabaseConfig.getAnonKey(context)
-            if (anonKey.isBlank()) {
-                val demoId = UUID.randomUUID().toString()
-                saveSession("demo-token-$demoId", demoId, email)
-                return@withContext AuthResult.Success(
-                    AuthResponse(
-                        accessToken = "demo-token-$demoId",
-                        user = SupabaseUser(id = demoId, email = email)
-                    )
-                )
-            }
-
-            try {
-                val response = SupabaseClient.authApi.signIn(
-                    apiKey = anonKey,
-                    request = LoginRequest(email = email.trim(), password = pass)
-                )
-                if (response.isSuccessful && response.body() != null) {
-                    val authBody = response.body()!!
-                    val token = authBody.accessToken ?: ""
-                    val uid = authBody.user?.id ?: ""
-                    saveSession(token, uid, email)
-                    AuthResult.Success(authBody)
-                } else {
-                    val err = response.errorBody()?.string() ?: "Login failed. Check your email or password."
-                    AuthResult.Error(err, response.code())
-                }
-            } catch (e: Exception) {
-                // Graceful local test fallback
-                val demoId = UUID.randomUUID().toString()
-                saveSession("local-token-$demoId", demoId, email)
-                AuthResult.Success(
-                    AuthResponse(
-                        accessToken = "local-token-$demoId",
-                        user = SupabaseUser(id = demoId, email = email)
-                    )
-                )
-            }
+    /** Step 1 of mobile login: SMS an OTP to +91 [mobile10]. */
+    suspend fun sendOtp(mobile10: String): AuthResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            SupabaseHttp.sendPhoneOtp("+91$mobile10")
+            AuthResult.Success(Unit)
+        } catch (e: SupabaseException) {
+            AuthResult.Error(e.message ?: "Could not send OTP", e.httpCode)
         }
+    }
+
+    /** Step 2: verify the OTP. A new number becomes a new account (it then registers a salon). */
+    suspend fun verifyOtp(mobile10: String, code: String): AuthResult<AuthResponse> = withContext(Dispatchers.IO) {
+        try {
+            currentSalon = null
+            AuthResult.Success(SupabaseHttp.verifyPhoneOtp("+91$mobile10", code).toAuthResponse(""))
+        } catch (e: SupabaseException) {
+            AuthResult.Error(e.message ?: "Login failed", e.httpCode)
+        }
+    }
 
     suspend fun fetchProfile(userId: String): Profile? = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = getAccessToken() ?: return@withContext null
-        if (anonKey.isBlank() || token.startsWith("demo-") || token.startsWith("local-")) {
-            return@withContext Profile(
-                id = userId,
-                fullName = "Salon Partner",
-                language = getSavedLanguage()
-            )
-        }
-
         try {
-            val response = SupabaseClient.restApi.getProfile(
-                apiKey = anonKey,
-                authHeader = "Bearer $token",
-                idFilter = "eq.$userId"
+            val rows = SupabaseHttp.select("profiles?id=eq.$userId&select=id,full_name,language,phone,role")
+            if (rows.length() == 0) return@withContext null
+            val o = rows.getJSONObject(0)
+            Profile(
+                id = o.getString("id"),
+                fullName = o.optStringOrNull("full_name"),
+                language = o.optStringOrNull("language") ?: getSavedLanguage(),
+                phone = o.optStringOrNull("phone"),
+                role = o.optStringOrNull("role")
             )
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                response.body()!!.first()
-            } else {
-                Profile(id = userId, language = getSavedLanguage())
-            }
-        } catch (_: Exception) {
-            Profile(id = userId, language = getSavedLanguage())
+        } catch (_: SupabaseException) {
+            null
         }
     }
 
+    /** Loads the signed-in owner's salon (the salons policy also exposes live salons, so filter by owner). */
     suspend fun fetchSalons(): List<Salon> = withContext(Dispatchers.IO) {
-        val anonKey = SupabaseConfig.getAnonKey(context)
-        val token = getAccessToken() ?: return@withContext emptyList()
-        if (anonKey.isBlank() || token.startsWith("demo-") || token.startsWith("local-")) {
-            // Check local cache
-            val cachedSalonName = prefs.getString("cached_salon_name", null)
-            if (cachedSalonName != null) {
-                val cachedId = prefs.getString("cached_salon_id", "demo-salon-1") ?: "demo-salon-1"
-                val cachedStatus = prefs.getString("cached_salon_status", "pending") ?: "pending"
-                val cachedReason = prefs.getString("cached_salon_reason", null)
-                val cachedType = prefs.getString("cached_salon_type", "unisex") ?: "unisex"
-                val cachedAddress = prefs.getString("cached_salon_address", "Main Market") ?: ""
-                val cachedArea = prefs.getString("cached_salon_area", "Central") ?: ""
-                val cachedCity = prefs.getString("cached_salon_city", "Mumbai") ?: ""
-                val cachedPincode = prefs.getString("cached_salon_pincode", "400001") ?: ""
-                val cachedPhone = prefs.getString("cached_salon_phone", "9876543210") ?: ""
-                val cachedActive = prefs.getBoolean("cached_salon_is_active", true)
-                return@withContext listOf(
-                    Salon(
-                        id = cachedId,
-                        ownerId = getUserId(),
-                        name = cachedSalonName,
-                        salonType = cachedType,
-                        address = cachedAddress,
-                        area = cachedArea,
-                        city = cachedCity,
-                        pincode = cachedPincode,
-                        phone = cachedPhone,
-                        verificationStatus = cachedStatus,
-                        rejectionReason = cachedReason,
-                        isActive = cachedActive
-                    )
-                )
-            }
-            return@withContext emptyList()
-        }
-
+        val uid = getUserId() ?: return@withContext emptyList()
         try {
-            val response = SupabaseClient.restApi.getSalons(
-                apiKey = anonKey,
-                authHeader = "Bearer $token"
-            )
-            if (response.isSuccessful) {
-                response.body() ?: emptyList()
-            } else {
-                emptyList()
-            }
-        } catch (_: Exception) {
-            emptyList()
+            val rows = SupabaseHttp.select("salons?owner_id=eq.$uid&select=$SALON_COLUMNS")
+            val list = (0 until rows.length()).map { parseSalon(rows.getJSONObject(it)) }
+            currentSalon = list.firstOrNull()
+            list
+        } catch (_: SupabaseException) {
+            listOfNotNull(currentSalon)
         }
     }
+
+    /** Last loaded salon without a network call. */
+    fun fetchSalonsNow(): Salon? = currentSalon
 
     fun saveLocalSalon(salon: Salon) {
-        prefs.edit()
-            .putString("cached_salon_id", salon.id)
-            .putString("cached_salon_name", salon.name)
-            .putString("cached_salon_type", salon.salonType)
-            .putString("cached_salon_address", salon.address)
-            .putString("cached_salon_area", salon.area)
-            .putString("cached_salon_city", salon.city)
-            .putString("cached_salon_pincode", salon.pincode)
-            .putString("cached_salon_phone", salon.phone)
-            .putString("cached_salon_status", salon.verificationStatus)
-            .putString("cached_salon_reason", salon.rejectionReason)
-            .putBoolean("cached_salon_is_active", salon.isActive)
-            .apply()
+        currentSalon = salon
+    }
+
+    private fun JSONObject.toAuthResponse(email: String): AuthResponse {
+        val user = optJSONObject("user")
+        return AuthResponse(
+            accessToken = optStringOrNull("access_token"),
+            tokenType = optStringOrNull("token_type"),
+            expiresIn = optLong("expires_in"),
+            refreshToken = optStringOrNull("refresh_token"),
+            user = user?.let {
+                SupabaseUser(id = it.optString("id"), email = it.optStringOrNull("email") ?: email, phone = it.optStringOrNull("phone"))
+            }
+        )
     }
 }
+
+internal fun JSONObject.optStringOrNull(key: String): String? =
+    if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }

@@ -39,6 +39,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,12 +67,16 @@ fun ProfileSettingsModal(
     onLanguageChange: (String) -> Unit,
     onToggleSalonActive: (Boolean) -> Unit,
     onLogout: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDeleteAccount: ((onResult: (String?) -> Unit) -> Unit)? = null
 ) {
     val lang = state.language
     val user = state.user
     val salon = state.salon
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var isDeleting by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -147,16 +152,18 @@ fun ProfileSettingsModal(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        val contact = user?.email?.takeIf { it.isNotBlank() }
+                            ?: (user?.phone ?: state.profile?.phone)?.takeIf { it.isNotBlank() }?.let { "+91 ${it.takeLast(10)}" }
+                        if (contact != null) Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Email,
+                                imageVector = if (user?.email.isNullOrBlank()) Icons.Default.Phone else Icons.Default.Email,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = user?.email ?: "owner@salon.com",
+                                text = contact,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -347,8 +354,60 @@ fun ProfileSettingsModal(
                         fontWeight = FontWeight.Bold
                     )
                 }
+
+                if (onDeleteAccount != null) {
+                    TextButton(
+                        onClick = { deleteError = null; showDeleteConfirm = true },
+                        modifier = Modifier.fillMaxWidth().testTag("profile_delete_account_btn")
+                    ) {
+                        Text("Delete my account", color = ErrorRed)
+                    }
+                }
             }
         }
+    }
+
+    if (showDeleteConfirm && onDeleteAccount != null) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) showDeleteConfirm = false },
+            title = { Text("Delete account?", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(
+                        "Your account, your salon, its staff, services, bookings history and uploaded documents will be " +
+                            "permanently deleted. This cannot be undone. Salons with upcoming bookings must cancel or " +
+                            "complete them first."
+                    )
+                    if (deleteError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(deleteError ?: "", color = ErrorRed, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !isDeleting,
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                    onClick = {
+                        isDeleting = true
+                        onDeleteAccount { error ->
+                            isDeleting = false
+                            if (error == null) {
+                                showDeleteConfirm = false
+                                onDismiss()
+                            } else {
+                                deleteError = error
+                            }
+                        }
+                    }
+                ) { Text(if (isDeleting) "Deleting..." else "Delete permanently") }
+            },
+            dismissButton = {
+                OutlinedButton(enabled = !isDeleting, onClick = { showDeleteConfirm = false }) {
+                    Text(SalonStrings.get(lang, "btn_cancel"))
+                }
+            }
+        )
     }
 
     if (showLogoutConfirm) {

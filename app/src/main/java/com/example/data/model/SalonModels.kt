@@ -130,8 +130,25 @@ data class Booking(
     @Json(name = "status") val status: String = "confirmed", // confirmed, arrived, in_service, completed, cancelled, no_show
     @Json(name = "price") val price: Double? = 0.0,
     @Json(name = "source") val source: String? = "online",
-    @Json(name = "notes") val notes: String? = null
-)
+    @Json(name = "notes") val notes: String? = null,
+    // Online payment by the customer: "not_required", "paid", "refund_pending", "refunded", "forfeited"...
+    @Json(name = "payment_status") val paymentStatus: String? = null,
+    @Json(name = "amount_paid") val amountPaid: Double = 0.0
+) {
+    /** Still to collect at the counter (price minus what the customer already paid online). */
+    val amountToCollect: Double
+        get() = if (paymentStatus == "paid") ((price ?: 0.0) - amountPaid).coerceAtLeast(0.0) else (price ?: 0.0)
+
+    /** Short payment line for cards, or null when the customer pays at the salon. */
+    val paymentLabel: String?
+        get() = when (paymentStatus) {
+            "paid" -> if (amountToCollect <= 0.0) "Paid online ₹${amountPaid.toInt()}"
+                      else "Advance ₹${amountPaid.toInt()} paid • collect ₹${amountToCollect.toInt()}"
+            "refund_pending", "refunded" -> "Refunded to customer"
+            "forfeited" -> "Advance ₹${amountPaid.toInt()} kept (late cancel / no-show)"
+            else -> null
+        }
+}
 
 @JsonClass(generateAdapter = true)
 data class Staff(
@@ -144,8 +161,29 @@ data class Staff(
     @Json(name = "commission_percent") val commissionPercent: Double = 20.0,
     @Json(name = "rating_avg") val ratingAvg: Double = 4.8,
     @Json(name = "rating_count") val ratingCount: Int = 36,
-    @Json(name = "is_active") val isActive: Boolean = true
+    @Json(name = "is_active") val isActive: Boolean = true,
+    // All-rounder: linked to every service of the salon, including services added later.
+    @Json(name = "does_all_services") val doesAllServices: Boolean = false
 )
+
+/** Setup checklist from get_salon_setup_status: what is still missing before the salon can go live. */
+data class SalonSetupStatus(
+    val isVerified: Boolean = false,
+    val isActive: Boolean = false,
+    val isLive: Boolean = false,
+    val ready: Boolean = false,
+    val missing: List<String> = emptyList(),
+    val hoursSet: Boolean = false,
+    val serviceCount: Int = 0,
+    val staffCount: Int = 0,
+    val locationSet: Boolean = false,
+    val servicesWithoutStaff: List<String> = emptyList(),
+    val staffWithoutServices: List<String> = emptyList(),
+    val staffWithoutHours: List<String> = emptyList()
+) {
+    val hasWarnings: Boolean
+        get() = servicesWithoutStaff.isNotEmpty() || staffWithoutServices.isNotEmpty() || staffWithoutHours.isNotEmpty()
+}
 
 @JsonClass(generateAdapter = true)
 data class SalonService(

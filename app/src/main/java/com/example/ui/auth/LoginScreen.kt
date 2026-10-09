@@ -133,8 +133,8 @@ fun LoginScreen(
                     }
                 }
 
-                // Supabase config / settings button
-                IconButton(
+                // Supabase key override: developer builds only
+                if (com.example.BuildConfig.DEBUG) IconButton(
                     onClick = onOpenConfig,
                     modifier = Modifier.testTag("config_button")
                 ) {
@@ -337,7 +337,7 @@ fun LoginScreen(
                     modifier = Modifier.testTag("signup_link")
                 ) {
                     Text(
-                        text = SalonStrings.get("need_account", lang),
+                        text = if (lang == "hi") "मोबाइल नंबर से लॉग इन / रजिस्टर करें" else "Log in or register with mobile number",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary
@@ -347,27 +347,6 @@ fun LoginScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
-
-            // Quick Demo Credentials Hint
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Supabase Project: zmdjtcjbwimiiphjnvcd (Mumbai)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "Quick Test: enter any email & password to test sign in / sign up flow.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }

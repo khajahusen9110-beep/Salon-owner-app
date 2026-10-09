@@ -50,8 +50,6 @@ fun PendingScreen(
     state: AuthUiState,
     onRefreshStatus: () -> Unit,
     onSignOut: () -> Unit,
-    onSimulateApproval: () -> Unit,
-    onSimulateRejection: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lang = state.language
@@ -203,46 +201,6 @@ fun PendingScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Review Simulator Pills (For testing end-to-end admin workflow)
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Admin Review Simulation (Testing Helper)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = onSimulateApproval,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Simulate Approve", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                        }
-                        OutlinedButton(
-                            onClick = onSimulateRejection,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Simulate Reject", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
         }
     }
 }

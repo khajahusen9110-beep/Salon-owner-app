@@ -77,7 +77,7 @@ fun SalonReviewsSection(
 
     val reviews = state.salonReviews
     val pendingCount = reviews.count { it.ownerReply.isNullOrBlank() }
-    val avgRating = if (reviews.isNotEmpty()) reviews.map { it.rating }.average() else (state.salon?.ratingAvg ?: 4.8)
+    val avgRating = if (reviews.isNotEmpty()) reviews.map { it.rating }.average() else 0.0
 
     val displayedReviews = when (filterType) {
         "pending" -> reviews.filter { it.ownerReply.isNullOrBlank() }

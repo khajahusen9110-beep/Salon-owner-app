@@ -315,6 +315,11 @@ fun MainAppShell(
                         onOpenReviews = {
                             onSelectTab("salon")
                             viewModel?.setSalonSection("reviews")
+                        },
+                        onGoLive = { viewModel?.goLive() },
+                        onOpenSalonSection = { section ->
+                            onSelectTab("salon")
+                            viewModel?.setSalonSection(section)
                         }
                     )
 
@@ -444,7 +449,8 @@ fun MainAppShell(
                     },
                     onLanguageChange = onLanguageChange,
                     onToggleSalonActive = onToggleSalonActive,
-                    onLogout = onSignOut
+                    onLogout = onSignOut,
+                    onDeleteAccount = viewModel?.let { vm -> { onResult: (String?) -> Unit -> vm.deleteAccount(onResult) } }
                 )
             }
         }
