@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import android.content.Context
+import com.example.data.model.Amenity
 import com.example.data.model.Booking
 import com.example.data.model.Combo
 import com.example.data.model.CustomerSummary
@@ -771,6 +772,25 @@ class SalonRepository(
             .put("bank_account_number", details.bankAccountNumber.trim().ifBlank { null } ?: JSONObject.NULL)
             .put("bank_ifsc", details.bankIfsc.trim().uppercase().ifBlank { null } ?: JSONObject.NULL)
         SupabaseHttp.insert("salon_payout_details", body, upsertOn = "salon_id")
+        Unit
+    }
+
+    // ======================= Facilities =======================
+
+    suspend fun getAmenities(): SalonResult<List<Amenity>> = io {
+        SupabaseHttp.select("amenities?is_active=eq.true&select=id,name,icon,group_name,exclusive_group,highlight,sort_order&order=sort_order,name")
+            .objects().map {
+                Amenity(
+                    id = it.getString("id"), name = it.optString("name"), icon = it.optString("icon"),
+                    groupName = it.optString("group_name"), exclusiveGroup = it.str("exclusive_group"),
+                    highlight = it.optBoolean("highlight"), sortOrder = it.optInt("sort_order", 100)
+                )
+            }
+    }
+
+    /** Replaces the salon's facilities (the server checks the list and the one-of rules). */
+    suspend fun saveMyAmenities(ids: List<String>): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("set_my_amenities", JSONObject().put("p_amenity_ids", JSONArray(ids)))
         Unit
     }
 

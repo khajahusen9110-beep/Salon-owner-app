@@ -21,6 +21,7 @@ import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SupabaseUser
+import com.example.data.model.Amenity
 import com.example.data.model.SalonSetupStatus
 import com.example.data.model.SalonWallet
 import com.example.data.model.UpdateSalonProfileRequest
@@ -216,6 +217,11 @@ data class AuthUiState(
     val payoutAccountNumber: String = "",
     val payoutIfsc: String = "",
     val isSavingPayout: Boolean = false,
+
+    // Facilities
+    val amenities: List<Amenity> = emptyList(),
+    val selectedAmenityIds: Set<String> = emptySet(),
+    val isSavingAmenities: Boolean = false,
 
     // Wallet & withdrawals
     val wallet: SalonWallet? = null,
@@ -1393,6 +1399,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             "payout_details" -> loadPayoutDetails()
             "time_off" -> loadBreaksAndTimeOff()
             "reviews" -> loadSalonReviews()
+            "facilities" -> loadAmenities()
         }
 
     }
@@ -2180,6 +2187,46 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 is SalonResult.Error -> _uiState.update { it.copy(isSavingPayout = false, errorMessage = res.message) }
             }
             loadWallet()
+        }
+    }
+
+    // Facilities
+    fun loadAmenities() {
+        viewModelScope.launch {
+            when (val res = salonRepo.getAmenities()) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(amenities = res.data, selectedAmenityIds = it.salon?.amenityIds?.toSet() ?: emptySet())
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Ticks/unticks a facility; picking one of a one-of group (AC / Non-AC / Partly AC) unticks the others. */
+    fun toggleAmenity(amenity: Amenity) {
+        _uiState.update { st ->
+            val current = st.selectedAmenityIds
+            val next = if (amenity.id in current) {
+                current - amenity.id
+            } else {
+                val sameGroup = amenity.exclusiveGroup?.let { g -> st.amenities.filter { it.exclusiveGroup == g }.map { it.id }.toSet() } ?: emptySet()
+                (current - sameGroup) + amenity.id
+            }
+            st.copy(selectedAmenityIds = next)
+        }
+    }
+
+    fun saveAmenities() {
+        val ids = _uiState.value.selectedAmenityIds.toList()
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSavingAmenities = true) }
+            when (val res = salonRepo.saveMyAmenities(ids)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(isSavingAmenities = false, salon = it.salon?.copy(amenityIds = ids),
+                        infoMessage = "Facilities saved. Customers will see them on your salon page.")
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingAmenities = false, errorMessage = res.message) }
+            }
         }
     }
 

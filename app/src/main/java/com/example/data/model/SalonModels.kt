@@ -67,7 +67,8 @@ data class Salon(
     @Json(name = "min_notice_minutes") val minNoticeMinutes: Int = 30,
     @Json(name = "late_threshold_minutes") val lateThresholdMinutes: Int = 15,
     @Json(name = "late_credit_amount") val lateCreditAmount: Double = 0.0,
-    @Json(name = "is_active") val isActive: Boolean = true
+    @Json(name = "is_active") val isActive: Boolean = true,
+    @Json(name = "amenity_ids") val amenityIds: List<String> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -506,4 +507,15 @@ data class WithdrawalRequest(
     val adminNote: String? = null,
     val createdAt: String = "",
     val processedAt: String? = null
+)
+
+/** A facility from the admin-managed list (Free WiFi, AC...). Same exclusiveGroup = pick only one. */
+data class Amenity(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val groupName: String,
+    val exclusiveGroup: String? = null,
+    val highlight: Boolean = false,
+    val sortOrder: Int = 100
 )
