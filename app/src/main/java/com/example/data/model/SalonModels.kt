@@ -477,4 +477,31 @@ data class SalonPayoutDetails(
     @Json(name = "bank_ifsc") val bankIfsc: String = ""
 )
 
+/** Money the salon can withdraw (from get_my_wallet). Amounts in rupees. */
+data class SalonWallet(
+    val earned: Double = 0.0,
+    val commission: Double = 0.0,
+    val commissionRate: Double = 0.0,
+    val held: Double = 0.0,
+    val withdrawn: Double = 0.0,
+    val pending: Double = 0.0,
+    val available: Double = 0.0,
+    val owed: Double = 0.0,
+    val minWithdrawal: Double = 100.0,
+    val hasUpi: Boolean = false,
+    val hasBank: Boolean = false,
+    val withdrawals: List<WithdrawalRequest> = emptyList()
+)
 
+data class WithdrawalRequest(
+    val id: String,
+    val amount: Double,
+    val method: String, // "upi" or "bank"
+    val status: String, // "requested", "paid", "rejected", "cancelled"
+    val upiId: String? = null,
+    val bankAccountLast4: String? = null,
+    val payoutReference: String? = null,
+    val adminNote: String? = null,
+    val createdAt: String = "",
+    val processedAt: String? = null
+)

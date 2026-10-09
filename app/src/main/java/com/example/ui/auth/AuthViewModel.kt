@@ -22,6 +22,7 @@ import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SupabaseUser
 import com.example.data.model.SalonSetupStatus
+import com.example.data.model.SalonWallet
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.repository.AuthRepository
@@ -211,6 +212,11 @@ data class AuthUiState(
     val payoutAccountNumber: String = "",
     val payoutIfsc: String = "",
     val isSavingPayout: Boolean = false,
+
+    // Wallet & withdrawals
+    val wallet: SalonWallet? = null,
+    val isLoadingWallet: Boolean = false,
+    val isRequestingWithdrawal: Boolean = false,
 
     // Part 5: Earnings (Kamai)
     val earningsDatePreset: String = "today", // "today", "week", "month", "custom"
@@ -695,6 +701,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
             "earnings" -> {
                 loadEarningsSummary()
+                loadWallet()
+                loadPayoutDetails()
             }
         }
 
@@ -2040,25 +2048,103 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun savePayoutDetails() {
         val s = _uiState.value
-        val salonId = s.salon?.id ?: "salon-1"
+        val salonId = s.salon?.id ?: return
+        val holder = s.payoutHolderName.trim()
+        val upi = s.payoutUpiId.trim()
+        val account = s.payoutAccountNumber.trim().replace(" ", "")
+        val ifsc = s.payoutIfsc.trim().uppercase()
+        val problem = when {
+            upi.isBlank() && account.isBlank() -> "Add a UPI ID or a bank account."
+            upi.isNotBlank() && !Regex("^[A-Za-z0-9._-]{2,128}@[A-Za-z]{2,64}$").matches(upi) ->
+                "UPI ID looks wrong. Example: name@okaxis"
+            (account.isBlank()) != (ifsc.isBlank()) -> "For bank transfer, enter both account number and IFSC."
+            account.isNotBlank() && !Regex("^[0-9]{9,18}$").matches(account) -> "Account number must be 9 to 18 digits."
+            ifsc.isNotBlank() && !Regex("^[A-Z]{4}0[A-Z0-9]{6}$").matches(ifsc) -> "IFSC looks wrong. Example: HDFC0001234"
+            account.isNotBlank() && holder.isBlank() -> "Enter the account holder's name (as in the bank)."
+            else -> null
+        }
+        if (problem != null) {
+            _uiState.update { it.copy(errorMessage = problem) }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingPayout = true) }
             val details = SalonPayoutDetails(
-                id = s.payoutDetails?.id ?: "pod-1",
+                id = s.payoutDetails?.id ?: "",
                 salonId = salonId,
-                accountHolderName = s.payoutHolderName.trim(),
-                upiId = s.payoutUpiId.trim(),
-                bankAccountNumber = s.payoutAccountNumber.trim(),
-                bankIfsc = s.payoutIfsc.trim().uppercase()
+                accountHolderName = holder,
+                upiId = upi,
+                bankAccountNumber = account,
+                bankIfsc = ifsc
             )
-            salonRepo.saveSalonPayoutDetails(details)
-            _uiState.update {
-                it.copy(
-                    isSavingPayout = false,
-                    payoutDetails = details,
-                    infoMessage = SalonStrings.get(it.language, "payout_saved_success")
-                )
+            when (val res = salonRepo.saveSalonPayoutDetails(details)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(
+                        isSavingPayout = false,
+                        payoutDetails = details,
+                        payoutAccountNumber = account,
+                        payoutIfsc = ifsc,
+                        infoMessage = SalonStrings.get(it.language, "payout_saved_success")
+                    )
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingPayout = false, errorMessage = res.message) }
             }
+            loadWallet()
+        }
+    }
+
+    // Wallet & withdrawals
+    fun loadWallet() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingWallet = true) }
+            when (val res = salonRepo.getMyWallet()) {
+                is SalonResult.Success -> _uiState.update { it.copy(isLoadingWallet = false, wallet = res.data) }
+                is SalonResult.Error -> _uiState.update { it.copy(isLoadingWallet = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Sends a withdrawal request; [onDone] gets true when it was accepted (to close the dialog). */
+    fun requestWithdrawal(amountText: String, method: String, onDone: (Boolean) -> Unit) {
+        val amount = amountText.trim().toDoubleOrNull()
+        val wallet = _uiState.value.wallet
+        val problem = when {
+            amount == null || amount <= 0 -> "Enter a valid amount."
+            wallet != null && amount < wallet.minWithdrawal -> "Minimum withdrawal is ₹${wallet.minWithdrawal.toInt()}."
+            wallet != null && amount > wallet.available -> "You can withdraw up to ₹${"%.2f".format(wallet.available)}."
+            else -> null
+        }
+        if (problem != null) {
+            _uiState.update { it.copy(errorMessage = problem) }
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRequestingWithdrawal = true) }
+            when (val res = salonRepo.requestWithdrawal(amount!!, method)) {
+                is SalonResult.Success -> {
+                    _uiState.update {
+                        it.copy(isRequestingWithdrawal = false,
+                            infoMessage = "Withdrawal request sent. You'll be notified when the money is sent.")
+                    }
+                    onDone(true)
+                }
+                is SalonResult.Error -> {
+                    _uiState.update { it.copy(isRequestingWithdrawal = false, errorMessage = res.message) }
+                    onDone(false)
+                }
+            }
+            loadWallet()
+        }
+    }
+
+    fun cancelWithdrawal(id: String) {
+        viewModelScope.launch {
+            when (val res = salonRepo.cancelWithdrawal(id)) {
+                is SalonResult.Success -> _uiState.update { it.copy(infoMessage = "Withdrawal request cancelled.") }
+                is SalonResult.Error -> _uiState.update { it.copy(errorMessage = res.message) }
+            }
+            loadWallet()
         }
     }
 

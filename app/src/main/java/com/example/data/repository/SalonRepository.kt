@@ -18,6 +18,8 @@ import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SalonSetupStatus
+import com.example.data.model.SalonWallet
+import com.example.data.model.WithdrawalRequest
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.network.IstTime
@@ -752,6 +754,51 @@ class SalonRepository(
             .put("bank_account_number", details.bankAccountNumber.trim().ifBlank { null } ?: JSONObject.NULL)
             .put("bank_ifsc", details.bankIfsc.trim().uppercase().ifBlank { null } ?: JSONObject.NULL)
         SupabaseHttp.insert("salon_payout_details", body, upsertOn = "salon_id")
+        Unit
+    }
+
+    // ======================= Wallet & withdrawals =======================
+
+    suspend fun getMyWallet(): SalonResult<SalonWallet> = io {
+        val o = JSONObject(SupabaseHttp.rpc("get_my_wallet", JSONObject()))
+        val list = o.optJSONArray("withdrawals") ?: JSONArray()
+        SalonWallet(
+            earned = o.optDouble("earned", 0.0),
+            commission = o.optDouble("commission", 0.0),
+            commissionRate = o.optDouble("commission_rate", 0.0),
+            held = o.optDouble("held", 0.0),
+            withdrawn = o.optDouble("withdrawn", 0.0),
+            pending = o.optDouble("pending", 0.0),
+            available = o.optDouble("available", 0.0),
+            owed = o.optDouble("owed", 0.0),
+            minWithdrawal = o.optDouble("min_withdrawal", 100.0),
+            hasUpi = o.optBoolean("has_upi"),
+            hasBank = o.optBoolean("has_bank"),
+            withdrawals = list.objects().map { w ->
+                WithdrawalRequest(
+                    id = w.getString("id"),
+                    amount = w.optDouble("amount", 0.0),
+                    method = w.optString("method"),
+                    status = w.optString("status"),
+                    upiId = w.str("upi_id"),
+                    bankAccountLast4 = w.str("bank_account_last4"),
+                    payoutReference = w.str("payout_reference"),
+                    adminNote = w.str("admin_note"),
+                    createdAt = IstTime.toLocal(w.str("created_at")).orEmpty(),
+                    processedAt = IstTime.toLocal(w.str("processed_at"))
+                )
+            }
+        )
+    }
+
+    /** Asks the platform to pay [amount] rupees to the saved UPI ID or bank account. */
+    suspend fun requestWithdrawal(amount: Double, method: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("request_withdrawal", JSONObject().put("p_amount", amount).put("p_method", method))
+        Unit
+    }
+
+    suspend fun cancelWithdrawal(id: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("cancel_my_withdrawal", JSONObject().put("p_id", id))
         Unit
     }
 

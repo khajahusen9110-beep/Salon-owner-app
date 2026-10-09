@@ -373,7 +373,18 @@ fun MainAppShell(
                         state = state,
                         onSelectPreset = { preset -> viewModel?.selectEarningsPreset(preset) },
                         onApplyCustomRange = { from, to -> viewModel?.setEarningsCustomDates(from, to) },
-                        onRefresh = { viewModel?.loadEarningsSummary() }
+                        onRefresh = {
+                            viewModel?.loadEarningsSummary()
+                            viewModel?.loadWallet()
+                        },
+                        onRequestWithdrawal = { amount, method, done ->
+                            viewModel?.requestWithdrawal(amount, method, done)
+                        },
+                        onCancelWithdrawal = { id -> viewModel?.cancelWithdrawal(id) },
+                        onOpenPayoutDetails = {
+                            onSelectTab("salon")
+                            viewModel?.setSalonSection("payout_details")
+                        }
                     )
 
                 }
