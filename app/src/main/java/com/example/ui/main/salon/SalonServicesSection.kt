@@ -1,5 +1,8 @@
 package com.example.ui.main.salon
 
+import com.example.util.ImageCompressor
+import com.example.ui.common.rememberPhotoPicker
+import com.example.ui.common.PhotoSlot
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -315,6 +318,8 @@ fun SalonServicesSection(
     if (state.showAddCategoryDialog) {
         var catName by remember { mutableStateOf(state.categoryFormName) }
         var sortOrder by remember { mutableStateOf(state.categoryFormSortOrder) }
+        val pickCategoryPhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+            onPhoto = { viewModel.uploadPhoto("category", it) }, onError = { viewModel.reportPhotoError(it) })
 
         AlertDialog(
             onDismissRequest = { viewModel.closeCategoryDialog() },
@@ -326,6 +331,18 @@ fun SalonServicesSection(
             },
             text = {
                 Column {
+                    PhotoSlot(
+                        imageUrl = state.categoryFormImageUrl,
+                        isUploading = state.uploadingPhoto == "category",
+                        label = "Category photo",
+                        onClick = pickCategoryPhoto,
+                        required = true,
+                        modifier = Modifier.testTag("slot_category_photo")
+                    )
+                    state.errorMessage?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = catName,
                         onValueChange = { catName = it },
@@ -353,6 +370,7 @@ fun SalonServicesSection(
                             viewModel.saveCategory(catName, sortOrder)
                         }
                     },
+                    enabled = state.uploadingPhoto == null && !state.categoryFormImageUrl.isNullOrBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
                     modifier = Modifier.testTag("btn_save_category")
                 ) {
@@ -581,6 +599,8 @@ fun AddEditServiceDialog(
     var durationExpanded by remember { mutableStateOf(false) }
     var bufferExpanded by remember { mutableStateOf(false) }
     var categoryExpanded by remember { mutableStateOf(false) }
+    val pickServicePhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+        onPhoto = { viewModel.uploadPhoto("service", it) }, onError = { viewModel.reportPhotoError(it) })
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -592,6 +612,20 @@ fun AddEditServiceDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // Photo (required): customers see it in the service list
+                PhotoSlot(
+                    imageUrl = state.serviceFormImageUrl,
+                    isUploading = state.uploadingPhoto == "service",
+                    label = "Service photo",
+                    onClick = pickServicePhoto,
+                    required = true,
+                    modifier = Modifier.testTag("slot_service_photo")
+                )
+                state.errorMessage?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+
                 // Name
                 OutlinedTextField(
                     value = state.serviceFormName,
@@ -773,7 +807,7 @@ fun AddEditServiceDialog(
                 onClick = { viewModel.saveSalonService() },
                 colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
                 modifier = Modifier.testTag("btn_save_service_submit"),
-                enabled = !state.isSavingService
+                enabled = !state.isSavingService && state.uploadingPhoto == null && !state.serviceFormImageUrl.isNullOrBlank()
             ) {
                 if (state.isSavingService) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)

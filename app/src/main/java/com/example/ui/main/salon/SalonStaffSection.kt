@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
@@ -72,8 +74,11 @@ import com.example.data.model.SalonService
 import com.example.data.model.Staff
 import com.example.ui.auth.AuthUiState
 import com.example.ui.auth.AuthViewModel
+import com.example.ui.common.PhotoSlot
+import com.example.ui.common.rememberPhotoPicker
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TerracottaPrimary
+import com.example.util.ImageCompressor
 import com.example.util.SalonStrings
 
 @Composable
@@ -86,6 +91,8 @@ fun SalonStaffSection(
     val lang = state.language
     val staffList = state.staffList
     val selectedStaff = state.selectedStaffForDetail
+    val pickStaffFormPhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+        onPhoto = { viewModel.uploadPhoto("staff_form", it) }, onError = { viewModel.reportPhotoError(it) })
 
     if (selectedStaff != null) {
         // Detailed Stylist Management: Working Hours & Services Performed
@@ -278,14 +285,15 @@ fun SalonStaffSection(
                         singleLine = true
                     )
                     Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = state.staffFormPhotoUrl ?: "",
-                        onValueChange = { viewModel.updateStaffFormPhoto(it.ifBlank { null }) },
-                        label = { Text("Photo URL (Optional)") },
-                        placeholder = { Text("https://...") },
-                        modifier = Modifier.fillMaxWidth().testTag("input_staff_photo"),
-                        shape = RoundedCornerShape(10.dp),
-                        singleLine = true
+                    Text("Photo (customers see this)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    PhotoSlot(
+                        imageUrl = state.staffFormPhotoUrl,
+                        isUploading = state.uploadingPhoto == "staff_form",
+                        label = "Add stylist photo",
+                        onClick = pickStaffFormPhoto,
+                        height = 110.dp,
+                        modifier = Modifier.testTag("slot_staff_photo")
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     StaffServicesPicker(
@@ -330,6 +338,8 @@ fun StaffDetailScreen(
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val daysOfWeek = listOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+    val pickDetailPhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+        onPhoto = { viewModel.uploadPhoto("staff_detail", it) }, onError = { viewModel.reportPhotoError(it) })
 
     Column(
         modifier = Modifier
@@ -350,6 +360,26 @@ fun StaffDetailScreen(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(enabled = state.uploadingPhoto == null) { pickDetailPhoto() }
+                    .testTag("staff_detail_photo"),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!staff.photoUrl.isNullOrBlank()) {
+                    AsyncImage(model = staff.photoUrl, contentDescription = staff.name, contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize())
+                }
+                if (state.uploadingPhoto == "staff_detail") {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else if (staff.photoUrl.isNullOrBlank()) {
+                    Icon(Icons.Default.AddAPhoto, contentDescription = "Add photo", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(
                     text = staff.name,
@@ -361,6 +391,11 @@ fun StaffDetailScreen(
                     text = "${staff.role ?: "Stylist"} · ${staff.commissionPercent.toInt()}% commission",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (staff.photoUrl.isNullOrBlank()) "Tap the circle to add a photo" else "Tap the photo to change it",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }

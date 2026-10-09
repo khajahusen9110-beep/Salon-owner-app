@@ -262,7 +262,8 @@ class SalonRepository(
             durationMins = o.optInt("duration_minutes", 30),
             bufferMins = o.optInt("buffer_minutes", 0),
             isActive = o.optBoolean("is_active", true),
-            assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") }
+            assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") },
+            imageUrl = o.str("image_url")
         )
     }
 
@@ -444,34 +445,49 @@ class SalonRepository(
         authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
-    /** Uploads into the owner's own folder (required by storage RLS) and returns the public URL. */
-    suspend fun uploadSalonPhoto(fileName: String, bytes: ByteArray, mimeType: String): SalonResult<String> = io {
+    /**
+     * Uploads an already-compressed JPEG into the owner's own folder (required by storage RLS) and
+     * returns its public URL. [bucket] is "salon-photos" (banner, stylists) or "service-images".
+     */
+    suspend fun uploadImage(bucket: String, folder: String, jpeg: ByteArray): SalonResult<String> = io {
         val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
-        val safeName = fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80)
-        val path = "$uid/${System.currentTimeMillis()}_$safeName"
-        SupabaseHttp.upload("salon-photos", path, bytes, mimeType)
-        SupabaseHttp.publicUrl("salon-photos", path)
+        val path = "$uid/$folder/${java.util.UUID.randomUUID()}.jpg"
+        SupabaseHttp.upload(bucket, path, jpeg, "image/jpeg")
+        SupabaseHttp.publicUrl(bucket, path)
+    }
+
+    /** Saves the salon's photo list and which one is the banner (shown first to customers). */
+    suspend fun updateSalonPhotos(salonId: String, photos: List<String>, bannerIndex: Int): SalonResult<Unit> = io {
+        val body = JSONObject().put("photos", JSONArray(photos)).put("cover_photo_index", bannerIndex.coerceIn(0, maxOf(photos.size - 1, 0)))
+        val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
+        if (rows.length() == 0) throw SupabaseException("Salon not found.")
+        authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
     // ======================= Catalog: categories, services, combos =======================
 
     suspend fun getServiceCategories(salonId: String): SalonResult<List<ServiceCategory>> = io {
-        SupabaseHttp.select("service_categories?salon_id=eq.$salonId&select=id,salon_id,name,sort_order&order=sort_order,name")
-            .objects().map { ServiceCategory(it.getString("id"), it.str("salon_id"), it.optString("name"), it.optInt("sort_order")) }
+        SupabaseHttp.select("service_categories?salon_id=eq.$salonId&select=id,salon_id,name,sort_order,image_url&order=sort_order,name")
+            .objects().map { ServiceCategory(it.getString("id"), it.str("salon_id"), it.optString("name"), it.optInt("sort_order"), it.str("image_url")) }
     }
 
-    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int): SalonResult<ServiceCategory> = io {
+    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int, imageUrl: String): SalonResult<ServiceCategory> = io {
         if (name.isBlank()) throw SupabaseException("Please enter a category name.")
+        if (imageUrl.isBlank()) throw SupabaseException("Please add a photo for this category.")
         val o = SupabaseHttp.insert(
             "service_categories",
-            JSONObject().put("salon_id", salonId).put("name", name.trim()).put("sort_order", sortOrder)
+            JSONObject().put("salon_id", salonId).put("name", name.trim()).put("sort_order", sortOrder).put("image_url", imageUrl)
         ).getJSONObject(0)
-        ServiceCategory(o.getString("id"), o.str("salon_id"), o.optString("name"), o.optInt("sort_order"))
+        ServiceCategory(o.getString("id"), o.str("salon_id"), o.optString("name"), o.optInt("sort_order"), o.str("image_url"))
     }
 
-    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int): SalonResult<Unit> = io {
+    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int, imageUrl: String): SalonResult<Unit> = io {
         if (name.isBlank()) throw SupabaseException("Please enter a category name.")
-        SupabaseHttp.update("service_categories", "id=eq.$id", JSONObject().put("name", name.trim()).put("sort_order", sortOrder))
+        if (imageUrl.isBlank()) throw SupabaseException("Please add a photo for this category.")
+        SupabaseHttp.update(
+            "service_categories", "id=eq.$id",
+            JSONObject().put("name", name.trim()).put("sort_order", sortOrder).put("image_url", imageUrl)
+        )
         Unit
     }
 
@@ -500,6 +516,7 @@ class SalonRepository(
             .put("duration_minutes", service.durationMins ?: 30)
             .put("buffer_minutes", service.bufferMins ?: 0)
             .put("is_active", service.isActive)
+            .put("image_url", service.imageUrl?.ifBlank { null } ?: JSONObject.NULL)
         val saved = if (isUuid(service.id)) {
             SupabaseHttp.update("services", "id=eq.${service.id}", body).objects().firstOrNull()
                 ?: throw SupabaseException("Service not found.")

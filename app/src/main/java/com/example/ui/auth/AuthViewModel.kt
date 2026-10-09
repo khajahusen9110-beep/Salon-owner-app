@@ -153,6 +153,10 @@ data class AuthUiState(
     val showAddCategoryDialog: Boolean = false,
     val categoryBeingEdited: ServiceCategory? = null,
     val categoryFormName: String = "",
+    val categoryFormImageUrl: String? = null,
+    val serviceFormImageUrl: String? = null,
+    // Which photo is uploading right now: "banner", "staff_form", "staff_detail", "category", "service"
+    val uploadingPhoto: String? = null,
     val categoryFormSortOrder: String = "1",
     val showAddEditServiceDialog: Boolean = false,
     val serviceBeingEdited: SalonService? = null,
@@ -1429,12 +1433,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun updateProfileType(type: String) = _uiState.update { it.copy(editSalonType = type) }
     fun toggleSalonActiveState(isActive: Boolean) = _uiState.update { it.copy(editSalonIsActive = isActive) }
 
-    fun addSalonPhotoUrl(url: String) {
-        val currentPhotos = _uiState.value.editSalonPhotos.toMutableList()
-        currentPhotos.add(url.trim())
-        _uiState.update { it.copy(editSalonPhotos = currentPhotos) }
-    }
-
     fun removeSalonPhoto(index: Int) {
         val currentPhotos = _uiState.value.editSalonPhotos.toMutableList()
         if (index in currentPhotos.indices) {
@@ -1531,6 +1529,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 showAddCategoryDialog = true,
                 categoryBeingEdited = null,
                 categoryFormName = "",
+                categoryFormImageUrl = null,
                 categoryFormSortOrder = "${(it.categoriesList.maxOfOrNull { c -> c.sortOrder } ?: 0) + 1}"
             )
         }
@@ -1542,8 +1541,86 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 showAddCategoryDialog = true,
                 categoryBeingEdited = cat,
                 categoryFormName = cat.name,
+                categoryFormImageUrl = cat.imageUrl,
                 categoryFormSortOrder = "${cat.sortOrder}"
             )
+        }
+    }
+
+    fun reportPhotoError(message: String) = _uiState.update { it.copy(errorMessage = message, uploadingPhoto = null) }
+
+    /**
+     * Uploads a photo the screen already compressed (<= 50 KB) and puts it where [target] says:
+     * "banner" (saved at once as the salon banner), "gallery" (extra salon photo, saved at once), "staff_form" (new stylist), "staff_detail" (saved at
+     * once for the open stylist), "category" / "service" (kept in the form until Save).
+     */
+    fun uploadPhoto(target: String, jpeg: ByteArray) {
+        val (bucket, folder) = when (target) {
+            "banner" -> "salon-photos" to "banner"
+            "gallery" -> "salon-photos" to "gallery"
+            "staff_form", "staff_detail" -> "salon-photos" to "staff"
+            "category" -> "service-images" to "categories"
+            else -> "service-images" to "services"
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(uploadingPhoto = target, errorMessage = null) }
+            val url = when (val up = salonRepo.uploadImage(bucket, folder, jpeg)) {
+                is SalonResult.Success -> up.data
+                is SalonResult.Error -> {
+                    _uiState.update { it.copy(uploadingPhoto = null, errorMessage = up.message) }
+                    return@launch
+                }
+            }
+            when (target) {
+                "banner" -> {
+                    val salon = _uiState.value.salon ?: return@launch
+                    // The new banner goes first; older photos stay as the gallery.
+                    val photos = listOf(url) + salon.photos.filter { it != url }
+                    when (val res = salonRepo.updateSalonPhotos(salon.id, photos, 0)) {
+                        is SalonResult.Success -> _uiState.update {
+                            it.copy(
+                                uploadingPhoto = null,
+                                salon = it.salon?.copy(photos = photos, coverPhotoIndex = 0),
+                                editSalonPhotos = photos,
+                                editCoverPhotoIndex = 0,
+                                infoMessage = "Banner updated. Customers will see it on your salon page."
+                            )
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "gallery" -> {
+                    val salon = _uiState.value.salon ?: return@launch
+                    val photos = salon.photos + url
+                    when (val res = salonRepo.updateSalonPhotos(salon.id, photos, salon.coverPhotoIndex)) {
+                        is SalonResult.Success -> _uiState.update {
+                            it.copy(
+                                uploadingPhoto = null,
+                                salon = it.salon?.copy(photos = photos),
+                                editSalonPhotos = photos,
+                                infoMessage = "Photo added."
+                            )
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "staff_form" -> _uiState.update { it.copy(uploadingPhoto = null, staffFormPhotoUrl = url) }
+                "staff_detail" -> {
+                    val staff = _uiState.value.selectedStaffForDetail ?: return@launch
+                    when (val res = salonRepo.updateStaffMember(staffId = staff.id, photoUrl = url)) {
+                        is SalonResult.Success -> {
+                            _uiState.update {
+                                it.copy(uploadingPhoto = null, selectedStaffForDetail = staff.copy(photoUrl = url),
+                                    infoMessage = "Photo updated for ${staff.name}")
+                            }
+                            loadStaffAndServices()
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "category" -> _uiState.update { it.copy(uploadingPhoto = null, categoryFormImageUrl = url) }
+                else -> _uiState.update { it.copy(uploadingPhoto = null, serviceFormImageUrl = url) }
+            }
         }
     }
 
@@ -1552,14 +1629,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveCategory(name: String, sortOrderStr: String) {
-        val salonId = _uiState.value.salon?.id ?: "salon-1"
+        val salonId = _uiState.value.salon?.id ?: return
         val sortOrder = sortOrderStr.toIntOrNull() ?: 1
         val editing = _uiState.value.categoryBeingEdited
+        val image = _uiState.value.categoryFormImageUrl.orEmpty()
+        if (image.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Please add a photo for this category.") }
+            return
+        }
         viewModelScope.launch {
-            if (editing == null) {
-                salonRepo.addServiceCategory(salonId, name, sortOrder)
-            } else {
-                salonRepo.updateServiceCategory(editing.id, name, sortOrder)
+            val res = if (editing == null) salonRepo.addServiceCategory(salonId, name, sortOrder, image)
+                      else salonRepo.updateServiceCategory(editing.id, name, sortOrder, image)
+            if (res is SalonResult.Error) {
+                _uiState.update { it.copy(errorMessage = res.message) }
+                return@launch
             }
             closeCategoryDialog()
             loadServiceCategories()
@@ -1588,7 +1671,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormPrice = "",
                 serviceFormDurationMins = 30,
                 serviceFormBufferMins = 0,
-                serviceFormStaffIds = allStaffIds
+                serviceFormStaffIds = allStaffIds,
+                serviceFormImageUrl = null
             )
         }
     }
@@ -1606,7 +1690,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormPrice = "${service.price.toInt()}",
                 serviceFormDurationMins = service.durationMins ?: 30,
                 serviceFormBufferMins = service.bufferMins ?: 0,
-                serviceFormStaffIds = assigned
+                serviceFormStaffIds = assigned,
+                serviceFormImageUrl = service.imageUrl
             )
         }
     }
@@ -1640,6 +1725,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(errorMessage = "Please enter valid service name and price") }
             return
         }
+        if (s.serviceFormImageUrl.isNullOrBlank()) {
+            _uiState.update { it.copy(errorMessage = "Please add a photo for this service.") }
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingService = true) }
@@ -1653,7 +1742,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 durationMins = s.serviceFormDurationMins,
                 isActive = true,
                 categoryId = s.serviceFormCategoryId,
-                bufferMins = s.serviceFormBufferMins
+                bufferMins = s.serviceFormBufferMins,
+                imageUrl = s.serviceFormImageUrl
             )
             when (val res = salonRepo.saveSalonService(service, s.serviceFormStaffIds.toList())) {
                 is SalonResult.Success -> {

@@ -196,7 +196,8 @@ data class SalonService(
     @Json(name = "duration_mins") val durationMins: Int? = 30,
     @Json(name = "buffer_mins") val bufferMins: Int? = 0,
     @Json(name = "is_active") val isActive: Boolean = true,
-    @Json(name = "assigned_staff_ids") val assignedStaffIds: List<String> = emptyList()
+    @Json(name = "assigned_staff_ids") val assignedStaffIds: List<String> = emptyList(),
+    @Json(name = "image_url") val imageUrl: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -378,7 +379,8 @@ data class ServiceCategory(
     @Json(name = "id") val id: String = "",
     @Json(name = "salon_id") val salonId: String? = null,
     @Json(name = "name") val name: String,
-    @Json(name = "sort_order") val sortOrder: Int = 0
+    @Json(name = "sort_order") val sortOrder: Int = 0,
+    @Json(name = "image_url") val imageUrl: String? = null
 )
 
 @JsonClass(generateAdapter = true)
