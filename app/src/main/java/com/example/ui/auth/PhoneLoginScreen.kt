@@ -71,7 +71,8 @@ fun PhoneLoginScreen(
     onChangeNumber: () -> Unit,
     onUseEmail: () -> Unit,
     onLanguageChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onLoadAppInfo: ((com.example.data.model.AppInfo?) -> Unit) -> Unit = { it(null) }
 ) {
     val lang = state.language
     var mobile by remember { mutableStateOf(state.otpMobile) }
@@ -214,6 +215,16 @@ fun PhoneLoginScreen(
                     }
                 }
             }
+
+            // Help when the OTP does not arrive or the account is blocked
+            var showHelp by remember { mutableStateOf(false) }
+            var appInfo by remember { mutableStateOf<com.example.data.model.AppInfo?>(null) }
+            LaunchedEffect(showHelp) { if (showHelp && appInfo == null) onLoadAppInfo { appInfo = it } }
+            TextButton(onClick = { showHelp = true }, modifier = Modifier.padding(top = 8.dp).testTag("login_help")) {
+                Text(t(lang, "Trouble logging in? Contact support", "लॉगिन में दिक्कत? सपोर्ट से संपर्क करें"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (showHelp) com.example.ui.main.SupportContactDialog(appInfo) { showHelp = false }
 
             Spacer(modifier = Modifier.height(16.dp))
             TextButton(onClick = onUseEmail, modifier = Modifier.testTag("use_email_login")) {

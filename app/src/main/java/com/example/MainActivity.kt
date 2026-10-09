@@ -65,7 +65,8 @@ fun SalonOwnerApp(
                 onVerifyOtp = { code -> viewModel.verifyLoginOtp(code) },
                 onChangeNumber = { viewModel.changeOtpNumber() },
                 onUseEmail = { viewModel.navigateToEmailLogin() },
-                onLanguageChange = { lang -> viewModel.setLanguage(lang) }
+                onLanguageChange = { lang -> viewModel.setLanguage(lang) },
+                onLoadAppInfo = { cb -> viewModel.loadAppInfo(cb) }
             )
 
             "email_login" -> LoginScreen(

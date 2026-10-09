@@ -3,7 +3,9 @@ package com.example.ui.auth
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.AppInfo
 import com.example.data.model.Booking
+import com.example.data.model.SupportTicket
 import com.example.data.model.Combo
 import com.example.data.model.CustomerSummary
 import com.example.data.model.OwnerDashboard
@@ -451,6 +453,32 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateToLogin() {
         _uiState.update { it.copy(destinationRoute = "login", errorMessage = null, otpSent = false) }
+    }
+
+    /** Help & Support data: contact info and the owner's requests (error message if loading failed). */
+    fun loadSupport(onLoaded: (AppInfo?, List<SupportTicket>?, String?) -> Unit) {
+        viewModelScope.launch {
+            val info = (salonRepo.getAppInfo() as? SalonResult.Success)?.data
+            when (val res = salonRepo.getMySupportTickets()) {
+                is SalonResult.Success -> onLoaded(info, res.data, null)
+                is SalonResult.Error -> onLoaded(info, null, res.message)
+            }
+        }
+    }
+
+    /** Support contact only (also before login). */
+    fun loadAppInfo(onLoaded: (AppInfo?) -> Unit) {
+        viewModelScope.launch { onLoaded((salonRepo.getAppInfo() as? SalonResult.Success)?.data) }
+    }
+
+    /** Sends a support request; [onDone] gets null on success or an error message. */
+    fun sendSupportTicket(category: String, subject: String, message: String, onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            when (val res = salonRepo.createSupportTicket(category, subject, message)) {
+                is SalonResult.Success -> onDone(null)
+                is SalonResult.Error -> onDone(res.message)
+            }
+        }
     }
 
     /** Deletes the account; [onResult] gets null on success or an error message. */

@@ -2,7 +2,9 @@ package com.example.data.repository
 
 import android.content.Context
 import com.example.data.model.Amenity
+import com.example.data.model.AppInfo
 import com.example.data.model.Booking
+import com.example.data.model.SupportTicket
 import com.example.data.model.Combo
 import com.example.data.model.CustomerSummary
 import com.example.data.model.OwnerDashboard
@@ -939,6 +941,41 @@ class SalonRepository(
         }
         SupabaseHttp.rpc("delete_my_account")
         authRepository.clearSession()
+    }
+
+    // ======================= Help & Support =======================
+
+    /** Support contact and legal links (works before login too). */
+    suspend fun getAppInfo(): SalonResult<AppInfo> = io {
+        val o = JSONArray(SupabaseHttp.rpc("get_app_info")).optJSONObject(0) ?: JSONObject()
+        AppInfo(o.str("support_phone"), o.str("support_email"), o.str("support_whatsapp"), o.str("support_hours"),
+            o.str("terms_url"), o.str("privacy_url"))
+    }
+
+    suspend fun getMySupportTickets(): SalonResult<List<SupportTicket>> = io {
+        SupabaseHttp.select(
+            "support_tickets?select=id,ticket_no,category,subject,message,status,admin_reply,created_at&order=created_at.desc&limit=50"
+        ).objects().map { o ->
+            SupportTicket(
+                id = o.getString("id"),
+                ticketNo = o.optLong("ticket_no"),
+                category = o.optString("category"),
+                subject = o.optString("subject"),
+                message = o.optString("message"),
+                status = o.optString("status", "open"),
+                adminReply = o.str("admin_reply")?.takeIf { it.isNotBlank() },
+                createdAt = o.optString("created_at")
+            )
+        }
+    }
+
+    suspend fun createSupportTicket(category: String, subject: String, message: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc(
+            "create_support_ticket",
+            JSONObject().put("p_category", category).put("p_subject", subject.trim()).put("p_message", message.trim())
+                .put("p_booking_id", JSONObject.NULL)
+        )
+        Unit
     }
 
     suspend fun updateProfileLanguage(userId: String, language: String): SalonResult<Unit> {

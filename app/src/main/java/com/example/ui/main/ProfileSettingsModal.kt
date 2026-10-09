@@ -68,7 +68,8 @@ fun ProfileSettingsModal(
     onToggleSalonActive: (Boolean) -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier,
-    onDeleteAccount: ((onResult: (String?) -> Unit) -> Unit)? = null
+    onDeleteAccount: ((onResult: (String?) -> Unit) -> Unit)? = null,
+    onOpenSupport: (() -> Unit)? = null
 ) {
     val lang = state.language
     val user = state.user
@@ -332,6 +333,20 @@ fun ProfileSettingsModal(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+
+                if (onOpenSupport != null) {
+                    OutlinedButton(
+                        onClick = onOpenSupport,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("profile_support_btn"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Help & Support", fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 // Sign Out Button
                 OutlinedButton(

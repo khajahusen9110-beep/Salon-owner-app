@@ -521,3 +521,27 @@ data class Amenity(
     val highlight: Boolean = false,
     val sortOrder: Int = 100
 )
+
+/** Support contact and legal links set by the platform admin. */
+data class AppInfo(
+    val supportPhone: String? = null,
+    val supportEmail: String? = null,
+    val supportWhatsapp: String? = null,
+    val supportHours: String? = null,
+    val termsUrl: String? = null,
+    val privacyUrl: String? = null
+) {
+    val hasContact: Boolean get() = supportPhone != null || supportEmail != null || supportWhatsapp != null
+}
+
+/** A help / complaint request to the platform team and its reply. */
+data class SupportTicket(
+    val id: String,
+    val ticketNo: Long,
+    val category: String,
+    val subject: String,
+    val message: String,
+    val status: String, // open, in_progress, resolved, closed
+    val adminReply: String?,
+    val createdAt: String
+)
