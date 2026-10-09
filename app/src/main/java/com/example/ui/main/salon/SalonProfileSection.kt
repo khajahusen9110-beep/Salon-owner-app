@@ -426,7 +426,7 @@ fun SalonProfileSection(
 
                 // Salon Type Dropdown
                 var salonTypeExpanded by remember { mutableStateOf(false) }
-                val types = listOf("unisex" to "Unisex Salon", "women" to "Women Only", "men" to "Men / Barber")
+                val types = listOf("unisex" to "Unisex Salon", "women" to "Beauty Parlour (Women)", "men" to "Men / Barber")
                 ExposedDropdownMenuBox(
                     expanded = salonTypeExpanded,
                     onExpandedChange = { salonTypeExpanded = !salonTypeExpanded }

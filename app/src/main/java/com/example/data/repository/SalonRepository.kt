@@ -569,6 +569,12 @@ class SalonRepository(
     suspend fun saveCombo(combo: Combo, serviceIds: List<String>): SalonResult<Combo> = io {
         if (combo.name.isBlank()) throw SupabaseException("Please enter a package name.")
         if (serviceIds.size < 2) throw SupabaseException("A package needs at least two services.")
+        if (serviceIds.distinct().size > 6) throw SupabaseException("A package can have at most 6 services.")
+        // One stylist does the whole package, so at least one stylist must have all of its services ticked.
+        val ids = JSONArray().apply { serviceIds.distinct().forEach { put(it) } }
+        if (JSONArray(SupabaseHttp.rpc("get_staff_for_services", JSONObject().put("p_service_ids", ids))).length() == 0) {
+            throw SupabaseException("No stylist does all of these services. Tick them for one stylist first (Staff section), or mark a stylist as all-rounder.")
+        }
         val body = JSONObject().put("name", combo.name.trim()).put("price", combo.price).put("is_active", combo.isActive)
         val saved = if (isUuid(combo.id)) {
             SupabaseHttp.update("combos", "id=eq.${combo.id}", body).objects().firstOrNull()
