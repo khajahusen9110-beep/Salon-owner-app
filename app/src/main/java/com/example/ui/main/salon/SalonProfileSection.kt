@@ -1,5 +1,8 @@
 package com.example.ui.main.salon
 
+import com.example.util.ImageCompressor
+import com.example.ui.common.rememberPhotoPicker
+import com.example.ui.common.PhotoSlot
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -89,8 +92,11 @@ fun SalonProfileSection(
     val lang = state.language
     val salon = state.salon
     val isVerified = salon?.verificationStatus == "approved"
-    var showAddPhotoDialog by remember { mutableStateOf(false) }
-    var newPhotoUrlInput by remember { mutableStateOf("") }
+    // Real photos only: picked from the phone, compressed to <= 50 KB, uploaded to storage.
+    val pickBanner = rememberPhotoPicker(ImageCompressor.Kind.BANNER,
+        onPhoto = { viewModel.uploadPhoto("banner", it) }, onError = { viewModel.reportPhotoError(it) })
+    val pickGalleryPhoto = rememberPhotoPicker(ImageCompressor.Kind.BANNER,
+        onPhoto = { viewModel.uploadPhoto("gallery", it) }, onError = { viewModel.reportPhotoError(it) })
 
     Column(
         modifier = modifier
@@ -266,7 +272,8 @@ fun SalonProfileSection(
                         )
                     }
                     Button(
-                        onClick = { showAddPhotoDialog = true },
+                        onClick = pickGalleryPhoto,
+                        enabled = state.uploadingPhoto == null,
                         modifier = Modifier.testTag("btn_open_add_photo"),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary)
@@ -279,6 +286,25 @@ fun SalonProfileSection(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Banner: the first thing customers see on the salon page and in search results.
+                Text("Salon banner", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(6.dp))
+                PhotoSlot(
+                    imageUrl = state.editSalonPhotos.getOrNull(state.editCoverPhotoIndex) ?: state.editSalonPhotos.firstOrNull(),
+                    isUploading = state.uploadingPhoto == "banner",
+                    label = "Upload banner",
+                    onClick = pickBanner,
+                    height = 150.dp,
+                    modifier = Modifier.testTag("slot_salon_banner")
+                )
+                TextButton(onClick = pickBanner, enabled = state.uploadingPhoto == null) {
+                    Text(if (state.editSalonPhotos.isEmpty()) "Upload banner" else "Change banner", fontSize = 12.sp)
+                }
+                if (state.uploadingPhoto == "gallery") {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
                 // Photos Grid
                 if (state.editSalonPhotos.isEmpty()) {
                     Box(
@@ -289,7 +315,7 @@ fun SalonProfileSection(
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("No photos uploaded yet. Tap + Add Photo.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("No photos yet. Upload a banner or tap + Add Photo.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
                     FlowRow(
@@ -400,7 +426,7 @@ fun SalonProfileSection(
 
                 // Salon Type Dropdown
                 var salonTypeExpanded by remember { mutableStateOf(false) }
-                val types = listOf("unisex" to "Unisex Salon", "women" to "Women Only", "men" to "Men / Barber")
+                val types = listOf("unisex" to "Unisex Salon", "women" to "Beauty Parlour (Women)", "men" to "Men / Barber")
                 ExposedDropdownMenuBox(
                     expanded = salonTypeExpanded,
                     onExpandedChange = { salonTypeExpanded = !salonTypeExpanded }
@@ -550,72 +576,6 @@ fun SalonProfileSection(
         }
 
         Spacer(modifier = Modifier.height(30.dp))
-    }
-
-    // Add Photo Dialog
-    if (showAddPhotoDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddPhotoDialog = false },
-            title = { Text("Add Showcase Photo") },
-            text = {
-                Column {
-                    Text(
-                        text = "Enter direct image URL (or choose from curated showcase options below):",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = newPhotoUrlInput,
-                        onValueChange = { newPhotoUrlInput = it },
-                        placeholder = { Text("https://...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(text = "Quick Presets:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    val presets = listOf(
-                        "Salon Interior" to "https://images.unsplash.com/photo-1560066984-138dadb4c035?w=800",
-                        "Styling Stations" to "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=800",
-                        "Spa & Wash Area" to "https://images.unsplash.com/photo-1580618672591-eb180b1a973f?w=800",
-                        "Barber Chair" to "https://images.unsplash.com/photo-1503951914875-452162b0f3f1?w=800"
-                    )
-
-                    presets.forEach { (label, url) ->
-                        OutlinedButton(
-                            onClick = { newPhotoUrlInput = url },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(label, fontSize = 12.sp)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newPhotoUrlInput.isNotBlank()) {
-                            viewModel.addSalonPhotoUrl(newPhotoUrlInput)
-                            newPhotoUrlInput = ""
-                            showAddPhotoDialog = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary)
-                ) {
-                    Text("Add Photo")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddPhotoDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 }
 

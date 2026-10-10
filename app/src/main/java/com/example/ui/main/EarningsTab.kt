@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
@@ -32,7 +33,7 @@ import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
-
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -44,8 +45,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,13 +61,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.SalonWallet
 import com.example.data.model.StaffEarningsSummary
 import com.example.ui.auth.AuthUiState
+import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.SuccessGreen
-
 import com.example.ui.theme.TerracottaPrimary
 import com.example.util.SalonStrings
 import java.text.SimpleDateFormat
@@ -76,7 +82,10 @@ fun EarningsTab(
     modifier: Modifier = Modifier,
     onSelectPreset: (String) -> Unit = {},
     onApplyCustomRange: (String, String) -> Unit = { _, _ -> },
-    onRefresh: () -> Unit = {}
+    onRefresh: () -> Unit = {},
+    onRequestWithdrawal: (String, String, (Boolean) -> Unit) -> Unit = { _, _, _ -> },
+    onCancelWithdrawal: (String) -> Unit = {},
+    onOpenPayoutDetails: () -> Unit = {}
 ) {
     val lang = state.language
     var customFrom by remember(state.earningsCustomFrom) {
@@ -101,6 +110,14 @@ fun EarningsTab(
             .padding(16.dp)
             .testTag("earnings_screen")
     ) {
+        WalletSection(
+            state = state,
+            onRequestWithdrawal = onRequestWithdrawal,
+            onCancelWithdrawal = onCancelWithdrawal,
+            onOpenPayoutDetails = onOpenPayoutDetails
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -733,4 +750,193 @@ fun StylistEarningsCard(
             }
         }
     }
+}
+
+private fun rupees(v: Double): String =
+    if (v == Math.floor(v)) "₹${v.toLong()}" else "₹${"%.2f".format(v)}"
+
+/** Withdrawable balance, Withdraw button and the history of withdrawal requests. */
+@Composable
+private fun WalletSection(
+    state: AuthUiState,
+    onRequestWithdrawal: (String, String, (Boolean) -> Unit) -> Unit,
+    onCancelWithdrawal: (String) -> Unit,
+    onOpenPayoutDetails: () -> Unit
+) {
+    val wallet = state.wallet
+    var showDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("card_wallet"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Wallet", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            if (wallet == null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                if (state.isLoadingWallet) CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                else Text("Couldn't load wallet. Pull to refresh.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                return@Column
+            }
+            Text("Available to withdraw", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp))
+            Text(rupees(wallet.available), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TerracottaPrimary,
+                modifier = Modifier.testTag("wallet_available"))
+            if (wallet.owed > 0) {
+                Text(
+                    "You owe the platform ${rupees(wallet.owed)} in commission (from bookings paid at the salon). " +
+                        "It is adjusted from your next online payments.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.error
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            WalletRow("Online payments for completed visits", rupees(wallet.earned))
+            WalletRow("Platform commission (${wallet.commissionRate.let { if (it == Math.floor(it)) it.toInt().toString() else it.toString() }}%)", "− ${rupees(wallet.commission)}")
+            WalletRow("Already withdrawn", "− ${rupees(wallet.withdrawn)}")
+            if (wallet.pending > 0) WalletRow("Withdrawal in progress", "− ${rupees(wallet.pending)}")
+            if (wallet.held > 0) WalletRow("Advance for upcoming visits (added after the visit)", rupees(wallet.held))
+
+            Spacer(modifier = Modifier.height(12.dp))
+            if (!wallet.hasUpi && !wallet.hasBank) {
+                OutlinedButton(onClick = onOpenPayoutDetails, modifier = Modifier.fillMaxWidth().testTag("btn_add_payout_method")) {
+                    Text("Add bank account / UPI to withdraw")
+                }
+            } else {
+                Button(
+                    onClick = { showDialog = true },
+                    enabled = wallet.available >= wallet.minWithdrawal && wallet.pending <= 0,
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_withdraw"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary)
+                ) {
+                    Text(
+                        when {
+                            wallet.pending > 0 -> "Withdrawal in progress"
+                            wallet.available < wallet.minWithdrawal -> "Withdraw (min ${rupees(wallet.minWithdrawal)})"
+                            else -> "Withdraw"
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                TextButton(onClick = onOpenPayoutDetails) { Text("Change bank / UPI details", fontSize = 12.sp) }
+            }
+
+            if (wallet.withdrawals.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Withdrawals", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                wallet.withdrawals.take(10).forEach { w ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${rupees(w.amount)} · " + if (w.method == "upi") "UPI ${w.upiId.orEmpty()}" else "Bank ••••${w.bankAccountLast4.orEmpty()}",
+                                fontSize = 13.sp, fontWeight = FontWeight.Medium
+                            )
+                            Text(w.createdAt.replace("T", " ").take(16), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            w.payoutReference?.let { Text("Ref: $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            w.adminNote?.let { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
+                        }
+                        val (label, color) = when (w.status) {
+                            "paid" -> "Paid" to SuccessGreen
+                            "rejected" -> "Rejected" to ErrorRed
+                            "cancelled" -> "Cancelled" to MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> "In progress" to GoldAccent
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = color)
+                            if (w.status == "requested") {
+                                TextButton(onClick = { onCancelWithdrawal(w.id) }) { Text("Cancel", fontSize = 11.sp) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDialog && wallet != null) {
+        WithdrawDialog(
+            wallet = wallet,
+            payoutUpi = state.payoutDetails?.upiId.orEmpty(),
+            payoutAccount = state.payoutDetails?.bankAccountNumber.orEmpty(),
+            isSubmitting = state.isRequestingWithdrawal,
+            errorMessage = state.errorMessage,
+            onDismiss = { showDialog = false },
+            onSubmit = { amount, method -> onRequestWithdrawal(amount, method) { ok -> if (ok) showDialog = false } }
+        )
+    }
+}
+
+@Composable
+private fun WalletRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun WithdrawDialog(
+    wallet: SalonWallet,
+    payoutUpi: String,
+    payoutAccount: String,
+    isSubmitting: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String) -> Unit
+) {
+    var amount by remember { mutableStateOf(if (wallet.available == Math.floor(wallet.available)) wallet.available.toLong().toString() else "%.2f".format(wallet.available)) }
+    var method by remember { mutableStateOf(if (wallet.hasUpi) "upi" else "bank") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Withdraw money", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Available: ${rupees(wallet.available)}", fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { v -> amount = v.filter { it.isDigit() || it == '.' }.take(10) },
+                    label = { Text("Amount (₹)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth().testTag("input_withdraw_amount")
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text("Send to", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                if (wallet.hasUpi) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { method = "upi" }) {
+                        RadioButton(selected = method == "upi", onClick = { method = "upi" })
+                        Text("UPI · $payoutUpi", fontSize = 13.sp)
+                    }
+                }
+                if (wallet.hasBank) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { method = "bank" }) {
+                        RadioButton(selected = method == "bank", onClick = { method = "bank" })
+                        Text("Bank account ••••${payoutAccount.takeLast(4)}", fontSize = 13.sp)
+                    }
+                }
+                Text(
+                    "Usually sent within 1-2 working days. Minimum ${rupees(wallet.minWithdrawal)}.",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                errorMessage?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 6.dp)) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(amount, method) },
+                enabled = !isSubmitting,
+                colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
+                modifier = Modifier.testTag("btn_confirm_withdraw")
+            ) {
+                if (isSubmitting) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text("Request")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }

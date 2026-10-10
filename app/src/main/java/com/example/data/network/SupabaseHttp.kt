@@ -275,6 +275,7 @@ object SupabaseHttp {
     private fun friendly(code: Int, pgCode: String?, raw: String): String {
         val m = raw.lowercase()
         return when {
+            m.contains("banned") -> "Your account is blocked. Please contact support."
             m.contains("invalid login credentials") -> "Incorrect email or password."
             m.contains("token has expired") || m.contains("otp") && m.contains("invalid") || m.contains("expired") && m.contains("token") ->
                 "Wrong or expired OTP. Please check the code or request a new one."

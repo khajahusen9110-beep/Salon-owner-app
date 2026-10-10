@@ -67,7 +67,8 @@ data class Salon(
     @Json(name = "min_notice_minutes") val minNoticeMinutes: Int = 30,
     @Json(name = "late_threshold_minutes") val lateThresholdMinutes: Int = 15,
     @Json(name = "late_credit_amount") val lateCreditAmount: Double = 0.0,
-    @Json(name = "is_active") val isActive: Boolean = true
+    @Json(name = "is_active") val isActive: Boolean = true,
+    @Json(name = "amenity_ids") val amenityIds: List<String> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -196,7 +197,10 @@ data class SalonService(
     @Json(name = "duration_mins") val durationMins: Int? = 30,
     @Json(name = "buffer_mins") val bufferMins: Int? = 0,
     @Json(name = "is_active") val isActive: Boolean = true,
-    @Json(name = "assigned_staff_ids") val assignedStaffIds: List<String> = emptyList()
+    @Json(name = "assigned_staff_ids") val assignedStaffIds: List<String> = emptyList(),
+    @Json(name = "image_url") val imageUrl: String? = null,
+    /** null = regular service, "bridal" or "groom" = wedding service (bigger advance, longer notice). */
+    @Json(name = "wedding_type") val weddingType: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -378,7 +382,8 @@ data class ServiceCategory(
     @Json(name = "id") val id: String = "",
     @Json(name = "salon_id") val salonId: String? = null,
     @Json(name = "name") val name: String,
-    @Json(name = "sort_order") val sortOrder: Int = 0
+    @Json(name = "sort_order") val sortOrder: Int = 0,
+    @Json(name = "image_url") val imageUrl: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -477,4 +482,66 @@ data class SalonPayoutDetails(
     @Json(name = "bank_ifsc") val bankIfsc: String = ""
 )
 
+/** Money the salon can withdraw (from get_my_wallet). Amounts in rupees. */
+data class SalonWallet(
+    val earned: Double = 0.0,
+    val commission: Double = 0.0,
+    val commissionRate: Double = 0.0,
+    val held: Double = 0.0,
+    val withdrawn: Double = 0.0,
+    val pending: Double = 0.0,
+    val available: Double = 0.0,
+    val owed: Double = 0.0,
+    val minWithdrawal: Double = 100.0,
+    val hasUpi: Boolean = false,
+    val hasBank: Boolean = false,
+    val withdrawals: List<WithdrawalRequest> = emptyList()
+)
 
+data class WithdrawalRequest(
+    val id: String,
+    val amount: Double,
+    val method: String, // "upi" or "bank"
+    val status: String, // "requested", "paid", "rejected", "cancelled"
+    val upiId: String? = null,
+    val bankAccountLast4: String? = null,
+    val payoutReference: String? = null,
+    val adminNote: String? = null,
+    val createdAt: String = "",
+    val processedAt: String? = null
+)
+
+/** A facility from the admin-managed list (Free WiFi, AC...). Same exclusiveGroup = pick only one. */
+data class Amenity(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val groupName: String,
+    val exclusiveGroup: String? = null,
+    val highlight: Boolean = false,
+    val sortOrder: Int = 100
+)
+
+/** Support contact and legal links set by the platform admin. */
+data class AppInfo(
+    val supportPhone: String? = null,
+    val supportEmail: String? = null,
+    val supportWhatsapp: String? = null,
+    val supportHours: String? = null,
+    val termsUrl: String? = null,
+    val privacyUrl: String? = null
+) {
+    val hasContact: Boolean get() = supportPhone != null || supportEmail != null || supportWhatsapp != null
+}
+
+/** A help / complaint request to the platform team and its reply. */
+data class SupportTicket(
+    val id: String,
+    val ticketNo: Long,
+    val category: String,
+    val subject: String,
+    val message: String,
+    val status: String, // open, in_progress, resolved, closed
+    val adminReply: String?,
+    val createdAt: String
+)

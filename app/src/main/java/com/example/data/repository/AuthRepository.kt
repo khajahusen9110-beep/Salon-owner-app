@@ -36,7 +36,7 @@ class AuthRepository(context: Context) {
             "id,owner_id,name,description,salon_type,address,area,city,pincode,phone,latitude,longitude," +
                 "gst_number,verification_status,rejection_reason,photos,cover_photo_index,is_verified," +
                 "rating_avg,rating_count,slot_interval_minutes,booking_window_days,min_notice_minutes," +
-                "late_threshold_minutes,late_credit_amount,is_active"
+                "late_threshold_minutes,late_credit_amount,is_active,amenity_ids"
 
         fun parseSalon(o: JSONObject): Salon {
             val photos = o.optJSONArray("photos") ?: JSONArray()
@@ -66,7 +66,8 @@ class AuthRepository(context: Context) {
                 minNoticeMinutes = o.optInt("min_notice_minutes", 30),
                 lateThresholdMinutes = o.optInt("late_threshold_minutes", 15),
                 lateCreditAmount = o.optDouble("late_credit_amount", 0.0),
-                isActive = o.optBoolean("is_active", true)
+                isActive = o.optBoolean("is_active", true),
+                amenityIds = o.optJSONArray("amenity_ids")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
             )
         }
     }

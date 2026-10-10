@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -208,6 +209,14 @@ fun SalonSettingsTab(
         }
         "payout_details" -> {
             SalonPayoutDetailsSection(
+                state = state,
+                viewModel = viewModel,
+                onBack = { viewModel.setSalonSection("menu") }
+            )
+            return
+        }
+        "facilities" -> {
+            com.example.ui.main.salon.SalonFacilitiesSection(
                 state = state,
                 viewModel = viewModel,
                 onBack = { viewModel.setSalonSection("menu") }
@@ -429,6 +438,17 @@ fun SalonSettingsTab(
                     testTag = "menu_staff_team",
                     badge = "${state.staffList.size} stylists",
                     onClick = { viewModel.setSalonSection("staff") }
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(start = 56.dp))
+
+                SalonMenuRow(
+                    icon = Icons.Default.Wifi,
+                    title = "Facilities",
+                    subtitle = "AC, Free WiFi, parking, payment options…",
+                    testTag = "menu_facilities",
+                    badge = state.salon?.amenityIds?.size?.takeIf { it > 0 }?.let { "$it added" },
+                    onClick = { viewModel.setSalonSection("facilities") }
                 )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(start = 56.dp))

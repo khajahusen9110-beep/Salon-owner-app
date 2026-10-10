@@ -1,5 +1,8 @@
 package com.example.ui.main.salon
 
+import com.example.util.ImageCompressor
+import com.example.ui.common.rememberPhotoPicker
+import com.example.ui.common.PhotoSlot
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -315,6 +318,8 @@ fun SalonServicesSection(
     if (state.showAddCategoryDialog) {
         var catName by remember { mutableStateOf(state.categoryFormName) }
         var sortOrder by remember { mutableStateOf(state.categoryFormSortOrder) }
+        val pickCategoryPhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+            onPhoto = { viewModel.uploadPhoto("category", it) }, onError = { viewModel.reportPhotoError(it) })
 
         AlertDialog(
             onDismissRequest = { viewModel.closeCategoryDialog() },
@@ -326,6 +331,18 @@ fun SalonServicesSection(
             },
             text = {
                 Column {
+                    PhotoSlot(
+                        imageUrl = state.categoryFormImageUrl,
+                        isUploading = state.uploadingPhoto == "category",
+                        label = "Category photo",
+                        onClick = pickCategoryPhoto,
+                        required = true,
+                        modifier = Modifier.testTag("slot_category_photo")
+                    )
+                    state.errorMessage?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = catName,
                         onValueChange = { catName = it },
@@ -353,6 +370,7 @@ fun SalonServicesSection(
                             viewModel.saveCategory(catName, sortOrder)
                         }
                     },
+                    enabled = state.uploadingPhoto == null && !state.categoryFormImageUrl.isNullOrBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
                     modifier = Modifier.testTag("btn_save_category")
                 ) {
@@ -473,6 +491,15 @@ fun CategoryServiceGroupView(
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            srv.weddingType?.let { w ->
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (w == "groom") "GROOM" else "BRIDAL",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "₹${srv.price.toInt()}",
@@ -575,12 +602,14 @@ fun AddEditServiceDialog(
 
     // Fixed duration options: strictly 30, 60, 90, 120, 150, 180, 210, 240 mins
     // Any 5-minute step is allowed by the database (5-480); these are the common choices.
-    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300)
+    val validDurations = listOf(15, 20, 30, 40, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360, 420, 480)
     val bufferOptions = listOf(0, 5, 10, 15, 20, 30)
 
     var durationExpanded by remember { mutableStateOf(false) }
     var bufferExpanded by remember { mutableStateOf(false) }
     var categoryExpanded by remember { mutableStateOf(false) }
+    val pickServicePhoto = rememberPhotoPicker(ImageCompressor.Kind.PHOTO,
+        onPhoto = { viewModel.uploadPhoto("service", it) }, onError = { viewModel.reportPhotoError(it) })
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -592,6 +621,20 @@ fun AddEditServiceDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // Photo (required): customers see it in the service list
+                PhotoSlot(
+                    imageUrl = state.serviceFormImageUrl,
+                    isUploading = state.uploadingPhoto == "service",
+                    label = "Service photo",
+                    onClick = pickServicePhoto,
+                    required = true,
+                    modifier = Modifier.testTag("slot_service_photo")
+                )
+                state.errorMessage?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+
                 // Name
                 OutlinedTextField(
                     value = state.serviceFormName,
@@ -717,6 +760,33 @@ fun AddEditServiceDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                // Wedding service: bride / groom packages get wedding booking rules
+                Text("Wedding service?", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(null to "No", "bridal" to "Bridal (bride)", "groom" to "Groom").forEach { (key, label) ->
+                        FilterChip(
+                            selected = state.serviceFormWeddingType == key,
+                            onClick = { viewModel.updateServiceFormWeddingType(key) },
+                            label = { Text(label, fontSize = 12.sp) },
+                            modifier = Modifier.testTag("wedding_type_${key ?: "none"}")
+                        )
+                    }
+                }
+                if (state.serviceFormWeddingType != null) {
+                    Text(
+                        "Wedding bookings: customers can book months ahead and pay a bigger advance online. " +
+                            "Late cancellation keeps the advance (rules set by the platform).",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
                 // Staff Assignment Section with "Select All Staff" Shortcut
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -773,7 +843,7 @@ fun AddEditServiceDialog(
                 onClick = { viewModel.saveSalonService() },
                 colors = ButtonDefaults.buttonColors(containerColor = TerracottaPrimary),
                 modifier = Modifier.testTag("btn_save_service_submit"),
-                enabled = !state.isSavingService
+                enabled = !state.isSavingService && state.uploadingPhoto == null && !state.serviceFormImageUrl.isNullOrBlank()
             ) {
                 if (state.isSavingService) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)

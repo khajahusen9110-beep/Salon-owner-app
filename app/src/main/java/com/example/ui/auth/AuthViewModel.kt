@@ -3,7 +3,9 @@ package com.example.ui.auth
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.AppInfo
 import com.example.data.model.Booking
+import com.example.data.model.SupportTicket
 import com.example.data.model.Combo
 import com.example.data.model.CustomerSummary
 import com.example.data.model.OwnerDashboard
@@ -21,7 +23,9 @@ import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SupabaseUser
+import com.example.data.model.Amenity
 import com.example.data.model.SalonSetupStatus
+import com.example.data.model.SalonWallet
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.repository.AuthRepository
@@ -152,6 +156,10 @@ data class AuthUiState(
     val showAddCategoryDialog: Boolean = false,
     val categoryBeingEdited: ServiceCategory? = null,
     val categoryFormName: String = "",
+    val categoryFormImageUrl: String? = null,
+    val serviceFormImageUrl: String? = null,
+    // Which photo is uploading right now: "banner", "staff_form", "staff_detail", "category", "service"
+    val uploadingPhoto: String? = null,
     val categoryFormSortOrder: String = "1",
     val showAddEditServiceDialog: Boolean = false,
     val serviceBeingEdited: SalonService? = null,
@@ -160,6 +168,7 @@ data class AuthUiState(
     val serviceFormPrice: String = "",
     val serviceFormDurationMins: Int = 30, // 30, 60, 90, 120, 150, 180, 210, 240
     val serviceFormBufferMins: Int = 0, // 0, 5, 10, 15, 20, 30
+    val serviceFormWeddingType: String? = null, // null, "bridal", "groom"
     val serviceFormStaffIds: Set<String> = emptySet(),
     val isSavingService: Boolean = false,
 
@@ -211,6 +220,16 @@ data class AuthUiState(
     val payoutAccountNumber: String = "",
     val payoutIfsc: String = "",
     val isSavingPayout: Boolean = false,
+
+    // Facilities
+    val amenities: List<Amenity> = emptyList(),
+    val selectedAmenityIds: Set<String> = emptySet(),
+    val isSavingAmenities: Boolean = false,
+
+    // Wallet & withdrawals
+    val wallet: SalonWallet? = null,
+    val isLoadingWallet: Boolean = false,
+    val isRequestingWithdrawal: Boolean = false,
 
     // Part 5: Earnings (Kamai)
     val earningsDatePreset: String = "today", // "today", "week", "month", "custom"
@@ -434,6 +453,32 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateToLogin() {
         _uiState.update { it.copy(destinationRoute = "login", errorMessage = null, otpSent = false) }
+    }
+
+    /** Help & Support data: contact info and the owner's requests (error message if loading failed). */
+    fun loadSupport(onLoaded: (AppInfo?, List<SupportTicket>?, String?) -> Unit) {
+        viewModelScope.launch {
+            val info = (salonRepo.getAppInfo() as? SalonResult.Success)?.data
+            when (val res = salonRepo.getMySupportTickets()) {
+                is SalonResult.Success -> onLoaded(info, res.data, null)
+                is SalonResult.Error -> onLoaded(info, null, res.message)
+            }
+        }
+    }
+
+    /** Support contact only (also before login). */
+    fun loadAppInfo(onLoaded: (AppInfo?) -> Unit) {
+        viewModelScope.launch { onLoaded((salonRepo.getAppInfo() as? SalonResult.Success)?.data) }
+    }
+
+    /** Sends a support request; [onDone] gets null on success or an error message. */
+    fun sendSupportTicket(category: String, subject: String, message: String, onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            when (val res = salonRepo.createSupportTicket(category, subject, message)) {
+                is SalonResult.Success -> onDone(null)
+                is SalonResult.Error -> onDone(res.message)
+            }
+        }
     }
 
     /** Deletes the account; [onResult] gets null on success or an error message. */
@@ -695,6 +740,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
             "earnings" -> {
                 loadEarningsSummary()
+                loadWallet()
+                loadPayoutDetails()
             }
         }
 
@@ -1381,6 +1428,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             "payout_details" -> loadPayoutDetails()
             "time_off" -> loadBreaksAndTimeOff()
             "reviews" -> loadSalonReviews()
+            "facilities" -> loadAmenities()
         }
 
     }
@@ -1420,12 +1468,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun updateProfileGst(gst: String) = _uiState.update { it.copy(editSalonGst = gst) }
     fun updateProfileType(type: String) = _uiState.update { it.copy(editSalonType = type) }
     fun toggleSalonActiveState(isActive: Boolean) = _uiState.update { it.copy(editSalonIsActive = isActive) }
-
-    fun addSalonPhotoUrl(url: String) {
-        val currentPhotos = _uiState.value.editSalonPhotos.toMutableList()
-        currentPhotos.add(url.trim())
-        _uiState.update { it.copy(editSalonPhotos = currentPhotos) }
-    }
 
     fun removeSalonPhoto(index: Int) {
         val currentPhotos = _uiState.value.editSalonPhotos.toMutableList()
@@ -1523,6 +1565,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 showAddCategoryDialog = true,
                 categoryBeingEdited = null,
                 categoryFormName = "",
+                categoryFormImageUrl = null,
                 categoryFormSortOrder = "${(it.categoriesList.maxOfOrNull { c -> c.sortOrder } ?: 0) + 1}"
             )
         }
@@ -1534,8 +1577,86 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 showAddCategoryDialog = true,
                 categoryBeingEdited = cat,
                 categoryFormName = cat.name,
+                categoryFormImageUrl = cat.imageUrl,
                 categoryFormSortOrder = "${cat.sortOrder}"
             )
+        }
+    }
+
+    fun reportPhotoError(message: String) = _uiState.update { it.copy(errorMessage = message, uploadingPhoto = null) }
+
+    /**
+     * Uploads a photo the screen already compressed (<= 50 KB) and puts it where [target] says:
+     * "banner" (saved at once as the salon banner), "gallery" (extra salon photo, saved at once), "staff_form" (new stylist), "staff_detail" (saved at
+     * once for the open stylist), "category" / "service" (kept in the form until Save).
+     */
+    fun uploadPhoto(target: String, jpeg: ByteArray) {
+        val (bucket, folder) = when (target) {
+            "banner" -> "salon-photos" to "banner"
+            "gallery" -> "salon-photos" to "gallery"
+            "staff_form", "staff_detail" -> "salon-photos" to "staff"
+            "category" -> "service-images" to "categories"
+            else -> "service-images" to "services"
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(uploadingPhoto = target, errorMessage = null) }
+            val url = when (val up = salonRepo.uploadImage(bucket, folder, jpeg)) {
+                is SalonResult.Success -> up.data
+                is SalonResult.Error -> {
+                    _uiState.update { it.copy(uploadingPhoto = null, errorMessage = up.message) }
+                    return@launch
+                }
+            }
+            when (target) {
+                "banner" -> {
+                    val salon = _uiState.value.salon ?: return@launch
+                    // The new banner goes first; older photos stay as the gallery.
+                    val photos = listOf(url) + salon.photos.filter { it != url }
+                    when (val res = salonRepo.updateSalonPhotos(salon.id, photos, 0)) {
+                        is SalonResult.Success -> _uiState.update {
+                            it.copy(
+                                uploadingPhoto = null,
+                                salon = it.salon?.copy(photos = photos, coverPhotoIndex = 0),
+                                editSalonPhotos = photos,
+                                editCoverPhotoIndex = 0,
+                                infoMessage = "Banner updated. Customers will see it on your salon page."
+                            )
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "gallery" -> {
+                    val salon = _uiState.value.salon ?: return@launch
+                    val photos = salon.photos + url
+                    when (val res = salonRepo.updateSalonPhotos(salon.id, photos, salon.coverPhotoIndex)) {
+                        is SalonResult.Success -> _uiState.update {
+                            it.copy(
+                                uploadingPhoto = null,
+                                salon = it.salon?.copy(photos = photos),
+                                editSalonPhotos = photos,
+                                infoMessage = "Photo added."
+                            )
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "staff_form" -> _uiState.update { it.copy(uploadingPhoto = null, staffFormPhotoUrl = url) }
+                "staff_detail" -> {
+                    val staff = _uiState.value.selectedStaffForDetail ?: return@launch
+                    when (val res = salonRepo.updateStaffMember(staffId = staff.id, photoUrl = url)) {
+                        is SalonResult.Success -> {
+                            _uiState.update {
+                                it.copy(uploadingPhoto = null, selectedStaffForDetail = staff.copy(photoUrl = url),
+                                    infoMessage = "Photo updated for ${staff.name}")
+                            }
+                            loadStaffAndServices()
+                        }
+                        is SalonResult.Error -> _uiState.update { it.copy(uploadingPhoto = null, errorMessage = res.message) }
+                    }
+                }
+                "category" -> _uiState.update { it.copy(uploadingPhoto = null, categoryFormImageUrl = url) }
+                else -> _uiState.update { it.copy(uploadingPhoto = null, serviceFormImageUrl = url) }
+            }
         }
     }
 
@@ -1544,14 +1665,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveCategory(name: String, sortOrderStr: String) {
-        val salonId = _uiState.value.salon?.id ?: "salon-1"
+        val salonId = _uiState.value.salon?.id ?: return
         val sortOrder = sortOrderStr.toIntOrNull() ?: 1
         val editing = _uiState.value.categoryBeingEdited
+        val image = _uiState.value.categoryFormImageUrl.orEmpty()
+        if (image.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Please add a photo for this category.") }
+            return
+        }
         viewModelScope.launch {
-            if (editing == null) {
-                salonRepo.addServiceCategory(salonId, name, sortOrder)
-            } else {
-                salonRepo.updateServiceCategory(editing.id, name, sortOrder)
+            val res = if (editing == null) salonRepo.addServiceCategory(salonId, name, sortOrder, image)
+                      else salonRepo.updateServiceCategory(editing.id, name, sortOrder, image)
+            if (res is SalonResult.Error) {
+                _uiState.update { it.copy(errorMessage = res.message) }
+                return@launch
             }
             closeCategoryDialog()
             loadServiceCategories()
@@ -1580,7 +1707,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormPrice = "",
                 serviceFormDurationMins = 30,
                 serviceFormBufferMins = 0,
-                serviceFormStaffIds = allStaffIds
+                serviceFormStaffIds = allStaffIds,
+                serviceFormImageUrl = null,
+                serviceFormWeddingType = null
             )
         }
     }
@@ -1598,7 +1727,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 serviceFormPrice = "${service.price.toInt()}",
                 serviceFormDurationMins = service.durationMins ?: 30,
                 serviceFormBufferMins = service.bufferMins ?: 0,
-                serviceFormStaffIds = assigned
+                serviceFormStaffIds = assigned,
+                serviceFormImageUrl = service.imageUrl,
+                serviceFormWeddingType = service.weddingType
             )
         }
     }
@@ -1612,6 +1743,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun updateServiceFormPrice(price: String) = _uiState.update { it.copy(serviceFormPrice = price) }
     fun updateServiceFormDuration(duration: Int) = _uiState.update { it.copy(serviceFormDurationMins = duration) }
     fun updateServiceFormBuffer(buffer: Int) = _uiState.update { it.copy(serviceFormBufferMins = buffer) }
+    fun updateServiceFormWeddingType(type: String?) = _uiState.update { it.copy(serviceFormWeddingType = type) }
 
     fun toggleServiceStaffAssignment(staffId: String) {
         val current = _uiState.value.serviceFormStaffIds.toMutableSet()
@@ -1632,6 +1764,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(errorMessage = "Please enter valid service name and price") }
             return
         }
+        if (s.serviceFormImageUrl.isNullOrBlank()) {
+            _uiState.update { it.copy(errorMessage = "Please add a photo for this service.") }
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingService = true) }
@@ -1645,7 +1781,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 durationMins = s.serviceFormDurationMins,
                 isActive = true,
                 categoryId = s.serviceFormCategoryId,
-                bufferMins = s.serviceFormBufferMins
+                bufferMins = s.serviceFormBufferMins,
+                imageUrl = s.serviceFormImageUrl,
+                weddingType = s.serviceFormWeddingType
             )
             when (val res = salonRepo.saveSalonService(service, s.serviceFormStaffIds.toList())) {
                 is SalonResult.Success -> {
@@ -2040,25 +2178,143 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun savePayoutDetails() {
         val s = _uiState.value
-        val salonId = s.salon?.id ?: "salon-1"
+        val salonId = s.salon?.id ?: return
+        val holder = s.payoutHolderName.trim()
+        val upi = s.payoutUpiId.trim()
+        val account = s.payoutAccountNumber.trim().replace(" ", "")
+        val ifsc = s.payoutIfsc.trim().uppercase()
+        val problem = when {
+            upi.isBlank() && account.isBlank() -> "Add a UPI ID or a bank account."
+            upi.isNotBlank() && !Regex("^[A-Za-z0-9._-]{2,128}@[A-Za-z]{2,64}$").matches(upi) ->
+                "UPI ID looks wrong. Example: name@okaxis"
+            (account.isBlank()) != (ifsc.isBlank()) -> "For bank transfer, enter both account number and IFSC."
+            account.isNotBlank() && !Regex("^[0-9]{9,18}$").matches(account) -> "Account number must be 9 to 18 digits."
+            ifsc.isNotBlank() && !Regex("^[A-Z]{4}0[A-Z0-9]{6}$").matches(ifsc) -> "IFSC looks wrong. Example: HDFC0001234"
+            account.isNotBlank() && holder.isBlank() -> "Enter the account holder's name (as in the bank)."
+            else -> null
+        }
+        if (problem != null) {
+            _uiState.update { it.copy(errorMessage = problem) }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingPayout = true) }
             val details = SalonPayoutDetails(
-                id = s.payoutDetails?.id ?: "pod-1",
+                id = s.payoutDetails?.id ?: "",
                 salonId = salonId,
-                accountHolderName = s.payoutHolderName.trim(),
-                upiId = s.payoutUpiId.trim(),
-                bankAccountNumber = s.payoutAccountNumber.trim(),
-                bankIfsc = s.payoutIfsc.trim().uppercase()
+                accountHolderName = holder,
+                upiId = upi,
+                bankAccountNumber = account,
+                bankIfsc = ifsc
             )
-            salonRepo.saveSalonPayoutDetails(details)
-            _uiState.update {
-                it.copy(
-                    isSavingPayout = false,
-                    payoutDetails = details,
-                    infoMessage = SalonStrings.get(it.language, "payout_saved_success")
-                )
+            when (val res = salonRepo.saveSalonPayoutDetails(details)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(
+                        isSavingPayout = false,
+                        payoutDetails = details,
+                        payoutAccountNumber = account,
+                        payoutIfsc = ifsc,
+                        infoMessage = SalonStrings.get(it.language, "payout_saved_success")
+                    )
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingPayout = false, errorMessage = res.message) }
             }
+            loadWallet()
+        }
+    }
+
+    // Facilities
+    fun loadAmenities() {
+        viewModelScope.launch {
+            when (val res = salonRepo.getAmenities()) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(amenities = res.data, selectedAmenityIds = it.salon?.amenityIds?.toSet() ?: emptySet())
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Ticks/unticks a facility; picking one of a one-of group (AC / Non-AC / Partly AC) unticks the others. */
+    fun toggleAmenity(amenity: Amenity) {
+        _uiState.update { st ->
+            val current = st.selectedAmenityIds
+            val next = if (amenity.id in current) {
+                current - amenity.id
+            } else {
+                val sameGroup = amenity.exclusiveGroup?.let { g -> st.amenities.filter { it.exclusiveGroup == g }.map { it.id }.toSet() } ?: emptySet()
+                (current - sameGroup) + amenity.id
+            }
+            st.copy(selectedAmenityIds = next)
+        }
+    }
+
+    fun saveAmenities() {
+        val ids = _uiState.value.selectedAmenityIds.toList()
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSavingAmenities = true) }
+            when (val res = salonRepo.saveMyAmenities(ids)) {
+                is SalonResult.Success -> _uiState.update {
+                    it.copy(isSavingAmenities = false, salon = it.salon?.copy(amenityIds = ids),
+                        infoMessage = "Facilities saved. Customers will see them on your salon page.")
+                }
+                is SalonResult.Error -> _uiState.update { it.copy(isSavingAmenities = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    // Wallet & withdrawals
+    fun loadWallet() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingWallet = true) }
+            when (val res = salonRepo.getMyWallet()) {
+                is SalonResult.Success -> _uiState.update { it.copy(isLoadingWallet = false, wallet = res.data) }
+                is SalonResult.Error -> _uiState.update { it.copy(isLoadingWallet = false, errorMessage = res.message) }
+            }
+        }
+    }
+
+    /** Sends a withdrawal request; [onDone] gets true when it was accepted (to close the dialog). */
+    fun requestWithdrawal(amountText: String, method: String, onDone: (Boolean) -> Unit) {
+        val amount = amountText.trim().toDoubleOrNull()
+        val wallet = _uiState.value.wallet
+        val problem = when {
+            amount == null || amount <= 0 -> "Enter a valid amount."
+            wallet != null && amount < wallet.minWithdrawal -> "Minimum withdrawal is ₹${wallet.minWithdrawal.toInt()}."
+            wallet != null && amount > wallet.available -> "You can withdraw up to ₹${"%.2f".format(wallet.available)}."
+            else -> null
+        }
+        if (problem != null) {
+            _uiState.update { it.copy(errorMessage = problem) }
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRequestingWithdrawal = true) }
+            when (val res = salonRepo.requestWithdrawal(amount!!, method)) {
+                is SalonResult.Success -> {
+                    _uiState.update {
+                        it.copy(isRequestingWithdrawal = false,
+                            infoMessage = "Withdrawal request sent. You'll be notified when the money is sent.")
+                    }
+                    onDone(true)
+                }
+                is SalonResult.Error -> {
+                    _uiState.update { it.copy(isRequestingWithdrawal = false, errorMessage = res.message) }
+                    onDone(false)
+                }
+            }
+            loadWallet()
+        }
+    }
+
+    fun cancelWithdrawal(id: String) {
+        viewModelScope.launch {
+            when (val res = salonRepo.cancelWithdrawal(id)) {
+                is SalonResult.Success -> _uiState.update { it.copy(infoMessage = "Withdrawal request cancelled.") }
+                is SalonResult.Error -> _uiState.update { it.copy(errorMessage = res.message) }
+            }
+            loadWallet()
         }
     }
 

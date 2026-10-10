@@ -130,6 +130,7 @@ fun MainAppShell(
     val snackbarHostState = remember { SnackbarHostState() }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     var showProfileModal by remember { mutableStateOf(false) }
+    var showSupport by remember { mutableStateOf(false) }
 
     val bookingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -373,7 +374,18 @@ fun MainAppShell(
                         state = state,
                         onSelectPreset = { preset -> viewModel?.selectEarningsPreset(preset) },
                         onApplyCustomRange = { from, to -> viewModel?.setEarningsCustomDates(from, to) },
-                        onRefresh = { viewModel?.loadEarningsSummary() }
+                        onRefresh = {
+                            viewModel?.loadEarningsSummary()
+                            viewModel?.loadWallet()
+                        },
+                        onRequestWithdrawal = { amount, method, done ->
+                            viewModel?.requestWithdrawal(amount, method, done)
+                        },
+                        onCancelWithdrawal = { id -> viewModel?.cancelWithdrawal(id) },
+                        onOpenPayoutDetails = {
+                            onSelectTab("salon")
+                            viewModel?.setSalonSection("payout_details")
+                        }
                     )
 
                 }
@@ -450,7 +462,17 @@ fun MainAppShell(
                     onLanguageChange = onLanguageChange,
                     onToggleSalonActive = onToggleSalonActive,
                     onLogout = onSignOut,
-                    onDeleteAccount = viewModel?.let { vm -> { onResult: (String?) -> Unit -> vm.deleteAccount(onResult) } }
+                    onDeleteAccount = viewModel?.let { vm -> { onResult: (String?) -> Unit -> vm.deleteAccount(onResult) } },
+                    onOpenSupport = viewModel?.let { { showSupport = true } }
+                )
+            }
+
+            // Help & Support
+            if (showSupport && viewModel != null) {
+                SupportModal(
+                    load = { cb -> viewModel.loadSupport(cb) },
+                    send = { c, s, m, done -> viewModel.sendSupportTicket(c, s, m, done) },
+                    onDismiss = { showSupport = false }
                 )
             }
         }

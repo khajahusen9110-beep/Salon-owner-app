@@ -1,7 +1,10 @@
 package com.example.data.repository
 
 import android.content.Context
+import com.example.data.model.Amenity
+import com.example.data.model.AppInfo
 import com.example.data.model.Booking
+import com.example.data.model.SupportTicket
 import com.example.data.model.Combo
 import com.example.data.model.CustomerSummary
 import com.example.data.model.OwnerDashboard
@@ -18,6 +21,8 @@ import com.example.data.model.StaffEarningsSummary
 import com.example.data.model.StaffHours
 import com.example.data.model.StaffTimeOff
 import com.example.data.model.SalonSetupStatus
+import com.example.data.model.SalonWallet
+import com.example.data.model.WithdrawalRequest
 import com.example.data.model.UpdateSalonProfileRequest
 import com.example.data.model.UpdateSalonSettingsRequest
 import com.example.data.network.IstTime
@@ -260,7 +265,9 @@ class SalonRepository(
             durationMins = o.optInt("duration_minutes", 30),
             bufferMins = o.optInt("buffer_minutes", 0),
             isActive = o.optBoolean("is_active", true),
-            assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") }
+            assignedStaffIds = (0 until links.length()).map { links.getJSONObject(it).getString("staff_id") },
+            imageUrl = o.str("image_url"),
+            weddingType = o.str("wedding_type")?.takeIf { it == "bridal" || it == "groom" }
         )
     }
 
@@ -442,34 +449,49 @@ class SalonRepository(
         authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
-    /** Uploads into the owner's own folder (required by storage RLS) and returns the public URL. */
-    suspend fun uploadSalonPhoto(fileName: String, bytes: ByteArray, mimeType: String): SalonResult<String> = io {
+    /**
+     * Uploads an already-compressed JPEG into the owner's own folder (required by storage RLS) and
+     * returns its public URL. [bucket] is "salon-photos" (banner, stylists) or "service-images".
+     */
+    suspend fun uploadImage(bucket: String, folder: String, jpeg: ByteArray): SalonResult<String> = io {
         val uid = authRepository.getUserId() ?: throw SupabaseException("Your session has expired. Please sign in again.", 401)
-        val safeName = fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80)
-        val path = "$uid/${System.currentTimeMillis()}_$safeName"
-        SupabaseHttp.upload("salon-photos", path, bytes, mimeType)
-        SupabaseHttp.publicUrl("salon-photos", path)
+        val path = "$uid/$folder/${java.util.UUID.randomUUID()}.jpg"
+        SupabaseHttp.upload(bucket, path, jpeg, "image/jpeg")
+        SupabaseHttp.publicUrl(bucket, path)
+    }
+
+    /** Saves the salon's photo list and which one is the banner (shown first to customers). */
+    suspend fun updateSalonPhotos(salonId: String, photos: List<String>, bannerIndex: Int): SalonResult<Unit> = io {
+        val body = JSONObject().put("photos", JSONArray(photos)).put("cover_photo_index", bannerIndex.coerceIn(0, maxOf(photos.size - 1, 0)))
+        val rows = SupabaseHttp.update("salons", "id=eq.$salonId", body)
+        if (rows.length() == 0) throw SupabaseException("Salon not found.")
+        authRepository.saveLocalSalon(AuthRepository.parseSalon(rows.getJSONObject(0)))
     }
 
     // ======================= Catalog: categories, services, combos =======================
 
     suspend fun getServiceCategories(salonId: String): SalonResult<List<ServiceCategory>> = io {
-        SupabaseHttp.select("service_categories?salon_id=eq.$salonId&select=id,salon_id,name,sort_order&order=sort_order,name")
-            .objects().map { ServiceCategory(it.getString("id"), it.str("salon_id"), it.optString("name"), it.optInt("sort_order")) }
+        SupabaseHttp.select("service_categories?salon_id=eq.$salonId&select=id,salon_id,name,sort_order,image_url&order=sort_order,name")
+            .objects().map { ServiceCategory(it.getString("id"), it.str("salon_id"), it.optString("name"), it.optInt("sort_order"), it.str("image_url")) }
     }
 
-    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int): SalonResult<ServiceCategory> = io {
+    suspend fun addServiceCategory(salonId: String, name: String, sortOrder: Int, imageUrl: String): SalonResult<ServiceCategory> = io {
         if (name.isBlank()) throw SupabaseException("Please enter a category name.")
+        if (imageUrl.isBlank()) throw SupabaseException("Please add a photo for this category.")
         val o = SupabaseHttp.insert(
             "service_categories",
-            JSONObject().put("salon_id", salonId).put("name", name.trim()).put("sort_order", sortOrder)
+            JSONObject().put("salon_id", salonId).put("name", name.trim()).put("sort_order", sortOrder).put("image_url", imageUrl)
         ).getJSONObject(0)
-        ServiceCategory(o.getString("id"), o.str("salon_id"), o.optString("name"), o.optInt("sort_order"))
+        ServiceCategory(o.getString("id"), o.str("salon_id"), o.optString("name"), o.optInt("sort_order"), o.str("image_url"))
     }
 
-    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int): SalonResult<Unit> = io {
+    suspend fun updateServiceCategory(id: String, name: String, sortOrder: Int, imageUrl: String): SalonResult<Unit> = io {
         if (name.isBlank()) throw SupabaseException("Please enter a category name.")
-        SupabaseHttp.update("service_categories", "id=eq.$id", JSONObject().put("name", name.trim()).put("sort_order", sortOrder))
+        if (imageUrl.isBlank()) throw SupabaseException("Please add a photo for this category.")
+        SupabaseHttp.update(
+            "service_categories", "id=eq.$id",
+            JSONObject().put("name", name.trim()).put("sort_order", sortOrder).put("image_url", imageUrl)
+        )
         Unit
     }
 
@@ -498,6 +520,8 @@ class SalonRepository(
             .put("duration_minutes", service.durationMins ?: 30)
             .put("buffer_minutes", service.bufferMins ?: 0)
             .put("is_active", service.isActive)
+            .put("image_url", service.imageUrl?.ifBlank { null } ?: JSONObject.NULL)
+            .put("wedding_type", service.weddingType ?: JSONObject.NULL)
         val saved = if (isUuid(service.id)) {
             SupabaseHttp.update("services", "id=eq.${service.id}", body).objects().firstOrNull()
                 ?: throw SupabaseException("Service not found.")
@@ -549,6 +573,12 @@ class SalonRepository(
     suspend fun saveCombo(combo: Combo, serviceIds: List<String>): SalonResult<Combo> = io {
         if (combo.name.isBlank()) throw SupabaseException("Please enter a package name.")
         if (serviceIds.size < 2) throw SupabaseException("A package needs at least two services.")
+        if (serviceIds.distinct().size > 6) throw SupabaseException("A package can have at most 6 services.")
+        // One stylist does the whole package, so at least one stylist must have all of its services ticked.
+        val ids = JSONArray().apply { serviceIds.distinct().forEach { put(it) } }
+        if (JSONArray(SupabaseHttp.rpc("get_staff_for_services", JSONObject().put("p_service_ids", ids))).length() == 0) {
+            throw SupabaseException("No stylist does all of these services. Tick them for one stylist first (Staff section), or mark a stylist as all-rounder.")
+        }
         val body = JSONObject().put("name", combo.name.trim()).put("price", combo.price).put("is_active", combo.isActive)
         val saved = if (isUuid(combo.id)) {
             SupabaseHttp.update("combos", "id=eq.${combo.id}", body).objects().firstOrNull()
@@ -755,6 +785,70 @@ class SalonRepository(
         Unit
     }
 
+    // ======================= Facilities =======================
+
+    suspend fun getAmenities(): SalonResult<List<Amenity>> = io {
+        SupabaseHttp.select("amenities?is_active=eq.true&select=id,name,icon,group_name,exclusive_group,highlight,sort_order&order=sort_order,name")
+            .objects().map {
+                Amenity(
+                    id = it.getString("id"), name = it.optString("name"), icon = it.optString("icon"),
+                    groupName = it.optString("group_name"), exclusiveGroup = it.str("exclusive_group"),
+                    highlight = it.optBoolean("highlight"), sortOrder = it.optInt("sort_order", 100)
+                )
+            }
+    }
+
+    /** Replaces the salon's facilities (the server checks the list and the one-of rules). */
+    suspend fun saveMyAmenities(ids: List<String>): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("set_my_amenities", JSONObject().put("p_amenity_ids", JSONArray(ids)))
+        Unit
+    }
+
+    // ======================= Wallet & withdrawals =======================
+
+    suspend fun getMyWallet(): SalonResult<SalonWallet> = io {
+        val o = JSONObject(SupabaseHttp.rpc("get_my_wallet", JSONObject()))
+        val list = o.optJSONArray("withdrawals") ?: JSONArray()
+        SalonWallet(
+            earned = o.optDouble("earned", 0.0),
+            commission = o.optDouble("commission", 0.0),
+            commissionRate = o.optDouble("commission_rate", 0.0),
+            held = o.optDouble("held", 0.0),
+            withdrawn = o.optDouble("withdrawn", 0.0),
+            pending = o.optDouble("pending", 0.0),
+            available = o.optDouble("available", 0.0),
+            owed = o.optDouble("owed", 0.0),
+            minWithdrawal = o.optDouble("min_withdrawal", 100.0),
+            hasUpi = o.optBoolean("has_upi"),
+            hasBank = o.optBoolean("has_bank"),
+            withdrawals = list.objects().map { w ->
+                WithdrawalRequest(
+                    id = w.getString("id"),
+                    amount = w.optDouble("amount", 0.0),
+                    method = w.optString("method"),
+                    status = w.optString("status"),
+                    upiId = w.str("upi_id"),
+                    bankAccountLast4 = w.str("bank_account_last4"),
+                    payoutReference = w.str("payout_reference"),
+                    adminNote = w.str("admin_note"),
+                    createdAt = IstTime.toLocal(w.str("created_at")).orEmpty(),
+                    processedAt = IstTime.toLocal(w.str("processed_at"))
+                )
+            }
+        )
+    }
+
+    /** Asks the platform to pay [amount] rupees to the saved UPI ID or bank account. */
+    suspend fun requestWithdrawal(amount: Double, method: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("request_withdrawal", JSONObject().put("p_amount", amount).put("p_method", method))
+        Unit
+    }
+
+    suspend fun cancelWithdrawal(id: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc("cancel_my_withdrawal", JSONObject().put("p_id", id))
+        Unit
+    }
+
     // ======================= Earnings, reviews, notifications, profile =======================
 
     suspend fun getEarningsSummary(fromDate: String, toDate: String): SalonResult<List<StaffEarningsSummary>> = io {
@@ -847,6 +941,41 @@ class SalonRepository(
         }
         SupabaseHttp.rpc("delete_my_account")
         authRepository.clearSession()
+    }
+
+    // ======================= Help & Support =======================
+
+    /** Support contact and legal links (works before login too). */
+    suspend fun getAppInfo(): SalonResult<AppInfo> = io {
+        val o = JSONArray(SupabaseHttp.rpc("get_app_info")).optJSONObject(0) ?: JSONObject()
+        AppInfo(o.str("support_phone"), o.str("support_email"), o.str("support_whatsapp"), o.str("support_hours"),
+            o.str("terms_url"), o.str("privacy_url"))
+    }
+
+    suspend fun getMySupportTickets(): SalonResult<List<SupportTicket>> = io {
+        SupabaseHttp.select(
+            "support_tickets?select=id,ticket_no,category,subject,message,status,admin_reply,created_at&order=created_at.desc&limit=50"
+        ).objects().map { o ->
+            SupportTicket(
+                id = o.getString("id"),
+                ticketNo = o.optLong("ticket_no"),
+                category = o.optString("category"),
+                subject = o.optString("subject"),
+                message = o.optString("message"),
+                status = o.optString("status", "open"),
+                adminReply = o.str("admin_reply")?.takeIf { it.isNotBlank() },
+                createdAt = o.optString("created_at")
+            )
+        }
+    }
+
+    suspend fun createSupportTicket(category: String, subject: String, message: String): SalonResult<Unit> = io {
+        SupabaseHttp.rpc(
+            "create_support_ticket",
+            JSONObject().put("p_category", category).put("p_subject", subject.trim()).put("p_message", message.trim())
+                .put("p_booking_id", JSONObject.NULL)
+        )
+        Unit
     }
 
     suspend fun updateProfileLanguage(userId: String, language: String): SalonResult<Unit> {
